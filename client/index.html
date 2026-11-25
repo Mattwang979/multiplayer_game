@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>前線 Frontline — 二戰多人混戰</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Noto+Sans+TC:wght@500;700;900&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div id="app">
+    <!-- 首頁 -->
+    <section id="screen-home" class="screen">
+      <div class="home-bg" aria-hidden="true"></div>
+      <div class="home-panel">
+        <p class="eyebrow">WWII · 2–4 PLAYERS · FREE FOR ALL</p>
+        <h1 class="logo">FRONT<br />LINE</h1>
+        <p class="logo-zh">前線</p>
+        <p class="tagline">四支部隊在環形戰場混戰。出兵推線、蓋工事、叫轟炸機，活到最後的才是贏家。</p>
+        <label class="field">
+          <span>你的代號</span>
+          <input id="name-input" maxlength="10" placeholder="例如：鐵血上校" autocomplete="nickname" />
+        </label>
+        <div class="home-actions">
+          <button id="btn-create" class="btn primary">建立房間</button>
+          <button id="btn-practice" class="btn">單人練習（對兩個電腦）</button>
+        </div>
+        <div class="join-row">
+          <label class="field grow">
+            <span>房間代碼</span>
+            <input id="code-input" maxlength="4" placeholder="ABCD" autocomplete="off" />
+          </label>
+          <button id="btn-join" class="btn">加入</button>
+        </div>
+        <p id="home-error" class="error" role="alert"></p>
+      </div>
+    </section>
+
+    <!-- 大廳 -->
+    <section id="screen-lobby" class="screen hidden">
+      <div class="lobby">
+        <header class="lobby-head">
+          <div>
+            <p class="eyebrow">作戰室</p>
+            <h2>等待部隊集結</h2>
+          </div>
+          <div class="code-box">
+            <span>房間代碼</span>
+            <strong id="lobby-code">----</strong>
+            <button id="btn-copy" class="btn small">複製邀請連結</button>
+          </div>
+        </header>
+        <div id="lobby-slots" class="slots"></div>
+        <p class="lobby-hint" id="lobby-hint"></p>
+        <footer class="lobby-foot">
+          <button id="btn-leave" class="btn">離開</button>
+          <button id="btn-start" class="btn primary big">開戰！</button>
+        </footer>
+      </div>
+    </section>
+
+    <!-- 對局 -->
+    <section id="screen-game" class="screen hidden">
+      <div id="game-wrap">
+        <div id="game-canvas"></div>
+        <div class="vignette" aria-hidden="true"></div>
+        <div class="grain" aria-hidden="true"></div>
+      </div>
+      <div id="hud-top" class="hud-top"></div>
+      <div id="feed" class="feed" aria-live="polite"></div>
+      <div id="banner" class="banner" aria-live="assertive"></div>
+      <div id="toast" class="toast" role="status"></div>
+      <div id="build-menu" class="build-menu hidden"></div>
+      <div id="target-hint" class="target-hint hidden"></div>
+      <div id="hud-bottom" class="hud-bottom"></div>
+      <div id="result" class="result hidden"></div>
+    </section>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
