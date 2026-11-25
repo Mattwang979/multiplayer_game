@@ -8,19 +8,21 @@ export interface MapLike<T> {
 export interface ArrayLike<T> {
   readonly length: number;
   [index: number]: T;
+  forEach?(cb: (value: T, index: number) => void): void;
 }
 
 export interface PlayerState {
   id: string;
   name: string;
   faction: number;
-  node: number;
+  hq: number;
   isBot: boolean;
   connected: boolean;
   alive: boolean;
   rank: number;
   funds: number;
   income: number;
+  forts: number;
   firepower: number;
   armor: number;
   logistics: number;
@@ -28,15 +30,33 @@ export interface PlayerState {
   airReady: ArrayLike<number>;
   unitCount: number;
   kills: number;
+  captures: number;
   deployed: number;
   spent: number;
+}
+
+export interface NodeState {
+  kind: string; // hq / fort / bigfort
+  owner: string;
+  faction: number;
+  hp: number;
+  maxHp: number;
+  capturer: string;
+  capFaction: number;
+  progress: number;
+  shots: number;
+  tl: number;
+  tx: number;
+  airShots: number;
+  ax: number;
+  ay: number;
 }
 
 export interface UnitState {
   id: string;
   type: string;
   owner: string;
-  side: number;
+  faction: number;
   lane: number;
   x: number;
   dir: number;
@@ -45,6 +65,7 @@ export interface UnitState {
   maxHp: number;
   attacking: boolean;
   shots: number;
+  tl: number;
   tx: number;
   landT: number;
 }
@@ -53,15 +74,16 @@ export interface StructureState {
   id: string;
   kind: string;
   owner: string;
-  side: number;
+  faction: number;
   lane: number;
+  node: number;
   slot: number;
   x: number;
   hp: number;
   maxHp: number;
   shots: number;
-  tx: number;
   tl: number;
+  tx: number;
   airShots: number;
   ax: number;
   ay: number;
@@ -71,7 +93,7 @@ export interface AircraftState {
   id: string;
   kind: string;
   owner: string;
-  side: number;
+  faction: number;
   x: number;
   y: number;
   angle: number;
@@ -85,12 +107,14 @@ export interface AircraftState {
 export interface GameState {
   phase: "lobby" | "playing" | "ended";
   hostId: string;
+  mapChoice: string;
+  mapId: string;
   time: number;
   duration: number;
   winnerId: string;
   endReason: string;
-  nodeCount: number;
   players: MapLike<PlayerState>;
+  nodes: ArrayLike<NodeState>;
   units: MapLike<UnitState>;
   structures: MapLike<StructureState>;
   aircraft: MapLike<AircraftState>;

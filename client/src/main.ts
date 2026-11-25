@@ -4,7 +4,7 @@ import Phaser from "phaser";
 import { WORLD_H, WORLD_W } from "@frontline/shared";
 import { canFullscreen, enterFullscreen, isMobile, updateDeviceClass } from "./device";
 import { BattleScene } from "./game/BattleScene";
-import { initAudio, play } from "./game/sound";
+import { initAudio, play, startMusic, stopMusic } from "./game/sound";
 import { createRoom, errorText, forgetRoom, joinRoom, rememberRoom, tryReconnect, type GameRoom } from "./net";
 import { bus, session } from "./session";
 import { Hud } from "./ui/hud";
@@ -35,7 +35,7 @@ function ensureGame() {
 
 // ---------------------------------------------------------------- 房間
 
-const SERVER_EVENTS = ["bomb", "paradrop", "airDown", "airIncoming", "eliminated", "hqAlert", "ended", "notice"];
+const SERVER_EVENTS = ["bomb", "paradrop", "airDown", "airIncoming", "eliminated", "hqAlert", "captured", "fortFallen", "ended", "notice"];
 
 function attach(room: GameRoom) {
   session.room = room;
@@ -63,6 +63,7 @@ function onState() {
     const prev = lastPhase;
     lastPhase = s.phase;
     if (s.phase === "lobby") {
+      stopMusic();
       showScreen("lobby");
     } else {
       ensureGame();
@@ -72,7 +73,8 @@ function onState() {
           bus.emit("newBattle");
           hud?.resetForBattle();
           setTimeout(() => bus.emit("banner", { kind: "gold", text: "開戰！", sub: "推進前線，消滅所有對手" }), 300);
-          play("siren", 0.4);
+          play("start", 0.9);
+          setTimeout(() => startMusic(), 1400);
         }
       }
       // 視窗大小可能在大廳時改變過
@@ -84,6 +86,7 @@ function onState() {
 
 async function leaveRoom() {
   const room = session.room;
+  stopMusic(0.5);
   forgetRoom();
   session.room = null;
   lastPhase = "";
@@ -183,7 +186,9 @@ async function boot() {
   bindHome();
   bindLobbyActions();
   showScreen("home");
-  document.addEventListener("pointerdown", () => initAudio(), { once: true });
+  // 每次觸控都確認音訊是開著的（iOS 接電話、切 App 回來後會被暫停）
+  document.addEventListener("pointerdown", () => initAudio(), { passive: true });
+  document.addEventListener("touchend", () => initAudio(), { passive: true });
   const room = await tryReconnect();
   if (room) attach(room);
   requestAnimationFrame(loop);

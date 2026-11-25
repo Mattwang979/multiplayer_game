@@ -1,5 +1,5 @@
 // 首頁與大廳（作戰室）
-import { FACTIONS, MAX_PLAYERS, MIN_PLAYERS, type Faction } from "@frontline/shared";
+import { FACTIONS, MAPS, MAX_PLAYERS, MIN_PLAYERS, buildMap, type Faction, type MapDef } from "@frontline/shared";
 import { play } from "../game/sound";
 import { session } from "../session";
 import type { PlayerState } from "../types";
@@ -72,6 +72,7 @@ export function renderLobby() {
   }
 
   const count = s.players.size;
+  renderMaps(s.mapChoice || "random", count, isHost);
   const start = $<HTMLButtonElement>("btn-start");
   start.classList.toggle("hidden", !isHost);
   start.disabled = count < MIN_PLAYERS;
@@ -80,10 +81,70 @@ export function renderLobby() {
       ? "至少要兩方才能開戰。把代碼傳給朋友，或按「加入電腦」補空位。"
       : `目前 ${count} 方，最多 ${MAX_PLAYERS} 方。3 方以上的混戰最好玩：旁邊兩家打得越凶，你越有機會撿便宜。`
     : "等房主開戰。可以先換一個喜歡的陣營顏色。";
-  $("lobby-hint").innerHTML = `${hint}<br><span style="color:#cfc5a8">操作：Q / W 選路線、1–5 出兵、B 轟炸、P 空降、Z / X / C 升級、點路邊的 ＋ 蓋工事。</span>`;
+  $("lobby-hint").innerHTML = `${hint}<br><span style="color:#cfc5a8">操作：點道路或自己的據點選出兵路線（Q / W 切換）、1–5 出兵、B 轟炸、P 空降、Z / X / C 升級、點路邊的 ＋ 蓋工事。攻破敵人或無主的堡壘後，派兵在旁邊站 3 秒就能佔領；大本營被打爆就出局。</span>`;
+}
+
+const previews = new Map<string, string>();
+
+/** 地圖縮圖：地形、道路、據點（大本營是方塊、中立堡壘是灰點） */
+function mapPreview(def: MapDef) {
+  const cached = previews.get(def.id);
+  if (cached) return cached;
+  const layout = buildMap(def.id);
+  const bg = { grass: "#a9c46c", river: "#a3c26a", desert: "#e2cf97", highland: "#b7c28a" }[def.theme];
+  const pts = (p: [number, number][]) => p.map(([x, y]) => `${x},${y}`).join(" ");
+  let g = `<rect width="1600" height="1000" fill="${bg}"/>`;
+  if (def.river) g += `<polyline points="${pts(def.river)}" fill="none" stroke="#5f9bbd" stroke-width="70" stroke-linejoin="round"/>`;
+  for (const [x, y, rx, ry] of def.lakes ?? []) g += `<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="${ry}" fill="#5f9bbd"/>`;
+  for (const m of def.mountains ?? []) g += `<polygon points="${pts(m)}" fill="#8d8573" stroke="#5e574a" stroke-width="8"/>`;
+  for (const lane of layout.lanes) {
+    const line = lane.pts.filter((_, i) => i % 3 === 0 || i === lane.pts.length - 1).map((p) => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join(" ");
+    g += `<polyline points="${line}" fill="none" stroke="#7c6a45" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+  for (const nd of def.nodes) {
+    if (nd.kind === "hq") g += `<rect x="${nd.x - 46}" y="${nd.y - 46}" width="92" height="92" fill="#f2c14e" stroke="#1d1d17" stroke-width="12"/>`;
+    else {
+      const r = nd.big ? 46 : 30;
+      const fill = nd.slot >= 0 ? "#ece4cf" : "#8d887a";
+      g += `<circle cx="${nd.x}" cy="${nd.y}" r="${r}" fill="${fill}" stroke="#1d1d17" stroke-width="10"/>`;
+    }
+  }
+  const svg = `<svg viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" aria-hidden="true">${g}</svg>`;
+  previews.set(def.id, svg);
+  return svg;
+}
+
+function renderMaps(choice: string, count: number, isHost: boolean) {
+  const cards = [
+    `<button class="map-card${choice === "random" ? " on" : ""}" data-map="random"${isHost ? "" : " disabled"}>
+      <div class="map-thumb random"><span>?</span></div>
+      <p class="map-name">隨機</p>
+      <p class="map-desc">從符合人數的地圖裡抽一張</p>
+    </button>`,
+    ...MAPS.map((m) => {
+      const fits = count <= m.slots;
+      const range = m.minPlayers === m.slots ? `${m.slots} 人` : `${m.minPlayers}–${m.slots} 人`;
+      return `<button class="map-card${choice === m.id ? " on" : ""}${fits ? "" : " nofit"}" data-map="${m.id}"${isHost ? "" : " disabled"}>
+        <div class="map-thumb">${mapPreview(m)}</div>
+        <p class="map-name">${m.name} <span class="map-n">${range}</span></p>
+        <p class="map-desc">${fits ? m.desc : `目前 ${count} 方，這張最多 ${m.slots} 方；開戰時會改成隨機`}</p>
+      </button>`;
+    }),
+  ].join("");
+  const box = $("lobby-maps");
+  if (box.dataset.html !== cards) {
+    box.dataset.html = cards;
+    box.innerHTML = cards;
+  }
 }
 
 export function bindLobbyActions() {
+  $("lobby-maps").addEventListener("click", (e) => {
+    const el = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-map]");
+    if (!el || el.disabled) return;
+    play("click");
+    session.send("setMap", { map: el.dataset.map });
+  });
   $("lobby-slots").addEventListener("click", (e) => {
     const el = (e.target as HTMLElement).closest<HTMLElement>("button[data-act]");
     if (!el) return;

@@ -364,6 +364,39 @@ function hq(ctx: Ctx, f: Faction) {
   fillStroke(ctx, flag, f.css, 1.2);
 }
 
+/** 星形稜堡：faction = null 是無主（灰色、白旗） */
+function fort(ctx: Ctx, f: Faction | null) {
+  ctx.translate(40, 40);
+  const star = new Path2D();
+  for (let i = 0; i < 8; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI) / 4;
+    const r = i % 2 === 0 ? 34 : 22;
+    if (i === 0) star.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+    else star.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  star.closePath();
+  fillStroke(ctx, star, "#a5a090", 2.5);
+  const g = ctx.createRadialGradient(-8, -8, 2, 0, 0, 34);
+  g.addColorStop(0, "rgba(255,255,255,0.25)");
+  g.addColorStop(1, "rgba(0,0,0,0.22)");
+  ctx.fillStyle = g;
+  ctx.fill(star);
+  const yard = new Path2D();
+  yard.arc(0, 0, 15, 0, Math.PI * 2);
+  fillStroke(ctx, yard, f ? f.css : "#8d887a", 2);
+  if (f) emblem(ctx, f.emblem, 0, 0, 8, f.mark);
+  // 旗子
+  ctx.strokeStyle = OUT;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(14, -30);
+  ctx.lineTo(14, -12);
+  ctx.stroke();
+  const flag = new Path2D();
+  flag.rect(14, -30, 13, 8);
+  fillStroke(ctx, flag, f ? f.css : "#f4f1e6", 1.2);
+}
+
 function bunker(ctx: Ctx, f: Faction) {
   ctx.translate(24, 24);
   sandbags(ctx, 0, 0, 19, Math.PI * 0.55, Math.PI * 1.45);
@@ -503,11 +536,13 @@ export function makeTextures(scene: Phaser.Scene) {
     canvasTex(scene, `howitzer${i}`, 60, 36, (c) => howitzer(c, f));
     canvasTex(scene, `hq${i}`, 120, 120, (c) => hq(c, f));
     canvasTex(scene, `bunker${i}`, 48, 48, (c) => bunker(c, f));
+    canvasTex(scene, `fort${i}`, 80, 80, (c) => fort(c, f));
     canvasTex(scene, `atnest${i}`, 52, 52, (c) => atNest(c, f));
     canvasTex(scene, `aa${i}`, 48, 48, (c) => aaBase(c, f));
     canvasTex(scene, `bomber${i}`, 116, 108, (c) => drawPlane(c, BOMBER, f, 1));
     canvasTex(scene, `transport${i}`, 100, 96, (c) => drawPlane(c, TRANSPORT, f, 1));
   });
+  canvasTex(scene, "fortNeutral", 80, 80, (c) => fort(c, null));
   canvasTex(scene, "mggun", 28, 14, mgGun);
   canvasTex(scene, "aagun", 30, 24, aaGun);
   canvasTex(scene, "chute", 56, 56, chute);

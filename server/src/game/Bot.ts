@@ -5,7 +5,6 @@ import {
   AIR_KINDS,
   BOMB,
   BUILD_SLOTS,
-  LANE_LENGTH,
   MAX_UPGRADE_LEVEL,
   STRUCTURES,
   UNITS,
@@ -13,7 +12,7 @@ import {
   UPGRADES,
   UPGRADE_KINDS,
   nodeEnd,
-  nodeLanes,
+  otherEnd,
   type AirKind,
   type BuildKind,
   type UnitType,
@@ -21,13 +20,16 @@ import {
 import type { Battle } from "./Battle";
 import type { Player, Unit } from "./schema";
 
-interface LaneReport {
+interface RouteReport {
+  node: number;
   lane: number;
-  mine: number; // 我方部隊價值
-  enemy: number; // 敵方部隊價值
+  mine: number;
+  enemy: number;
   enemySoft: number;
   enemyHard: number;
-  danger: number; // 敵人離我方指揮部多近（0~1）
+  danger: number; // 敵人離這個據點多近（0~1）
+  targetFree: boolean; // 路的另一端是無主據點
+  targetEnemy: boolean; // 路的另一端是敵人的據點
 }
 
 export class BotBrain {
@@ -52,44 +54,58 @@ export class BotBrain {
     const p = s.players.get(this.playerId);
     if (!p || !p.alive) return;
     s.aircraft.forEach((a) => {
-      if (a.side !== p.node) this.sawEnemyAir = s.time;
+      if (a.owner !== p.id) this.sawEnemyAir = s.time;
     });
 
     const reports = this.scout(battle, p);
+    if (reports.length === 0) return;
     if (this.rng() < 0.5) this.tryAir(battle, p);
     if (s.time > 40 && this.rng() < 0.25) this.tryUpgrade(battle, p);
     if (this.rng() < 0.3) this.tryBuild(battle, p, reports);
     this.trySpawn(battle, p, reports);
   }
 
-  private scout(battle: Battle, p: Player): LaneReport[] {
-    const lanes = nodeLanes(battle.map, p.node);
-    const reports = lanes.map((lane) => ({ lane, mine: 0, enemy: 0, enemySoft: 0, enemyHard: 0, danger: 0 }));
-    battle.state.units.forEach((u) => {
-      const r = reports.find((x) => x.lane === u.lane);
-      if (!r) return;
+  private scout(battle: Battle, p: Player): RouteReport[] {
+    const s = battle.state;
+    const routes = battle.routesFor(p.id);
+    const reports: RouteReport[] = routes.map(({ node, lane }) => {
+      const far = otherEnd(battle.map.lanes[lane], node);
+      const fn = s.nodes[far];
+      return {
+        node, lane, mine: 0, enemy: 0, enemySoft: 0, enemyHard: 0, danger: 0,
+        targetFree: !fn.owner || fn.hp <= 0,
+        targetEnemy: !!fn.owner && fn.owner !== p.id && fn.hp > 0,
+      };
+    });
+    s.units.forEach((u) => {
       const def = UNITS[u.type as UnitType];
       const value = def.cost * (u.hp / u.maxHp);
-      if (u.side === p.node) {
-        r.mine += value;
-        return;
+      for (const r of reports) {
+        if (r.lane !== u.lane) continue;
+        if (u.owner === p.id) {
+          r.mine += value;
+          continue;
+        }
+        r.enemy += value;
+        if (def.armor === "hard") r.enemyHard += value;
+        else r.enemySoft += value;
+        const home = nodeEnd(battle.map.lanes[u.lane], r.node);
+        r.danger = Math.max(r.danger, 1 - Math.abs(u.x - home) / battle.map.lanes[u.lane].len);
       }
-      r.enemy += value;
-      if (def.armor === "hard") r.enemyHard += value;
-      else r.enemySoft += value;
-      const home = nodeEnd(battle.map.lanes[u.lane], p.node);
-      r.danger = Math.max(r.danger, 1 - Math.abs(u.x - home) / LANE_LENGTH);
     });
     return reports;
   }
 
-  private pickLane(reports: LaneReport[]): LaneReport {
-    // 25% 機率隨便選一條，避免只顧一條線
-    if (this.rng() < 0.25) return reports[Math.floor(this.rng() * reports.length)];
+  private pickRoute(reports: RouteReport[], time: number): RouteReport {
+    if (this.rng() < 0.2) return reports[Math.floor(this.rng() * reports.length)];
     let best = reports[0];
     let bestScore = -Infinity;
     for (const r of reports) {
-      const score = r.enemy - r.mine + r.danger * 250 + this.rng() * 40;
+      // 開局搶無主堡壘；之後看哪裡壓力大、哪裡可以打敵人
+      let score = r.enemy - r.mine + r.danger * 260 + this.rng() * 50;
+      if (r.targetFree) score += time < 90 ? 220 : 90;
+      if (r.targetEnemy) score += 60;
+      if (!r.targetFree && !r.targetEnemy && r.enemy === 0) score -= 120; // 往自己後方的路
       if (score > bestScore) {
         bestScore = score;
         best = r;
@@ -98,9 +114,10 @@ export class BotBrain {
     return best;
   }
 
-  private chooseUnit(r: LaneReport): UnitType {
+  private chooseUnit(r: RouteReport): UnitType {
     if (r.enemyHard >= 200 && this.rng() < 0.75) return "at";
     if (r.enemySoft >= 280 && this.rng() < 0.5) return this.rng() < 0.5 ? "mg" : "tank";
+    if (r.targetEnemy && this.rng() < 0.25) return this.rng() < 0.5 ? "tank" : "artillery";
     const roll = this.rng();
     if (roll < 0.38) return "rifle";
     if (roll < 0.56) return "mg";
@@ -109,39 +126,37 @@ export class BotBrain {
     return "artillery";
   }
 
-  private trySpawn(battle: Battle, p: Player, reports: LaneReport[]) {
-    if (reports.length === 0) return;
-    const lane = this.pickLane(reports);
-    let type = this.savingFor ?? this.chooseUnit(lane);
+  private trySpawn(battle: Battle, p: Player, reports: RouteReport[]) {
+    const r = this.pickRoute(reports, battle.state.time);
+    let type = this.savingFor ?? this.chooseUnit(r);
     const ready = battle.state.time >= (p.deployReady[UNIT_TYPES.indexOf(type)] ?? 0);
-
     if (!ready || p.fundsExact < UNITS[type].cost) {
-      // 錢不夠時：一半機會存錢，一半機會先出便宜的步兵
       if (ready && this.rng() < 0.5) {
         this.savingFor = type;
         return;
       }
       type = "rifle";
     }
-    if (battle.spawn(this.playerId, type, lane.lane) === null && type === this.savingFor) this.savingFor = null;
+    if (battle.spawn(this.playerId, type, r.lane, r.node) === null && type === this.savingFor) this.savingFor = null;
   }
 
-  private tryBuild(battle: Battle, p: Player, reports: LaneReport[]) {
+  private tryBuild(battle: Battle, p: Player, reports: RouteReport[]) {
     if (p.fundsExact < 320) return;
-    // 看過敵方飛機，而且還沒有防空砲：優先蓋一座
-    const recentlyBombed = battle.state.time - this.sawEnemyAir < 60 && this.sawEnemyAir > 0;
+    const recentlyBombed = this.sawEnemyAir > 0 && battle.state.time - this.sawEnemyAir < 60;
     let hasAA = false;
     battle.state.structures.forEach((st) => {
       if (st.owner === p.id && st.kind === "aa") hasAA = true;
     });
     const sorted = [...reports].sort((a, b) => b.enemy + b.danger * 300 - (a.enemy + a.danger * 300));
     for (const r of sorted) {
+      if (r.enemy === 0 && !recentlyBombed) continue;
       for (let slot = BUILD_SLOTS.length - 1; slot >= 0; slot--) {
-        if (battle.state.structures.has(`s${p.node}_${r.lane}_${slot}`)) continue;
+        if (!battle.slotFits(r.lane, slot)) continue;
+        if (battle.state.structures.has(`s${r.lane}_${r.node}_${slot}`)) continue;
         let kind: BuildKind = r.enemyHard > r.enemySoft ? "atnest" : "bunker";
         if (recentlyBombed && !hasAA) kind = "aa";
         if (p.fundsExact < STRUCTURES[kind].cost + 150) return;
-        battle.build(this.playerId, r.lane, slot, kind);
+        battle.build(this.playerId, r.lane, r.node, slot, kind);
         return;
       }
     }
@@ -162,7 +177,7 @@ export class BotBrain {
     if (bestKind && p.fundsExact >= bestCost + 200) battle.upgrade(this.playerId, bestKind);
   }
 
-  /** 找敵人最密集的地方叫轟炸，或把空降兵丟到敵方砲兵／工事附近 */
+  /** 找敵人最密集的地方叫轟炸，或把空降兵丟到無主堡壘／敵方砲兵旁邊 */
   private tryAir(battle: Battle, p: Player) {
     const s = battle.state;
     const kind: AirKind = this.rng() < 0.6 ? "bomber" : "transport";
@@ -171,7 +186,7 @@ export class BotBrain {
 
     const enemies: Unit[] = [];
     s.units.forEach((u) => {
-      if (u.side !== p.node && u.landT <= s.time) enemies.push(u);
+      if (u.owner !== p.id && u.landT <= s.time) enemies.push(u);
     });
     if (kind === "bomber") {
       let bestValue = 0;
@@ -189,12 +204,16 @@ export class BotBrain {
       if (best && bestValue >= 300) battle.callAir(this.playerId, "bomber", best.lane, best.x);
       return;
     }
-    // 空降：挑敵方的砲兵或工事，丟在它旁邊
+    // 空降：優先丟在無主堡壘旁邊搶佔，其次是敵方砲兵
     const targets: { lane: number; x: number }[] = [];
-    for (const e of enemies) if (e.type === "artillery") targets.push({ lane: e.lane, x: e.x });
-    s.structures.forEach((st) => {
-      if (st.side !== p.node && st.kind !== "hq" && st.lane >= 0) targets.push({ lane: st.lane, x: st.x });
+    s.nodes.forEach((n, i) => {
+      if ((n.owner && n.hp > 0) || battle.map.adj[i].length === 0) return;
+      const lane = battle.map.adj[i][0];
+      const geom = battle.map.lanes[lane];
+      const end = nodeEnd(geom, i);
+      targets.push({ lane, x: end === 0 ? 30 : geom.len - 30 });
     });
+    if (targets.length === 0) for (const e of enemies) if (e.type === "artillery") targets.push({ lane: e.lane, x: e.x });
     if (targets.length === 0) return;
     const t = targets[Math.floor(this.rng() * targets.length)];
     battle.callAir(this.playerId, "transport", t.lane, t.x);

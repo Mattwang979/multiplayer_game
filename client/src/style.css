@@ -89,6 +89,29 @@ button { font-family: inherit; }
 .slot.empty { border-style: dashed; justify-content: center; align-items: center; text-align: center; color: var(--muted); }
 .slot .slot-actions { margin-top: auto; display: flex; gap: 8px; flex-wrap: wrap; }
 .lobby-hint { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.6; }
+.map-pick { display: flex; flex-direction: column; gap: 10px; }
+.map-pick .eyebrow { margin: 0; }
+.maps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.map-card { display: flex; flex-direction: column; gap: 6px; padding: 8px 8px 10px; background: var(--panel); border: 2px solid var(--line); color: var(--text); text-align: left; cursor: pointer; }
+.map-card:disabled { cursor: default; }
+.map-card:not(:disabled):hover { border-color: var(--line-2); }
+.map-card.on { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold); }
+.map-card.nofit { opacity: 0.55; }
+.map-thumb { aspect-ratio: 16 / 10; overflow: hidden; border: 2px solid #1d1d17; background: #2a2619; }
+.map-thumb svg { display: block; width: 100%; height: 100%; }
+.map-thumb.random { display: flex; align-items: center; justify-content: center; background: repeating-linear-gradient(135deg, #2a2619 0 14px, #34321f 14px 28px); }
+.map-thumb.random span { font-family: var(--stencil); font-size: 40px; color: var(--gold); }
+.map-name { margin: 0; font-size: 16px; font-weight: 900; }
+.map-card.on .map-name { color: var(--gold); }
+.map-n { font-size: 12px; font-weight: 700; color: var(--muted); margin-left: 4px; }
+.map-desc { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.pc-row { display: flex; align-items: center; gap: 6px; }
+.pc-row .bar { flex: 1; min-width: 0; }
+.pc-forts { flex: none; font-size: 11px; font-weight: 900; line-height: 1; color: var(--text); white-space: nowrap; }
+.route-btn span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.route-tip { display: none; }
+body.mobile .route-btn { flex-direction: column; align-items: flex-start; gap: 4px; }
+body.mobile .route-tip { display: block; font-style: normal; font-size: 11px; font-weight: 500; color: var(--muted); }
 .lobby-foot { display: flex; justify-content: space-between; gap: 12px; }
 
 /* ---------- 對局畫面 ---------- */
@@ -254,6 +277,8 @@ body.mobile .g-lanes > button, body.mobile .g-air > button, body.mobile .g-units
 body.mobile .card, body.mobile .lane-btn { width: 100%; min-width: 0; min-height: 0; padding: 3px 8px; justify-content: center; }
 body.mobile .card b, body.mobile .lane-btn b { display: none; }
 body.mobile .card .cn, body.mobile .lane-btn span { font-size: 15px; }
+body.mobile .route-btn { justify-content: flex-start; text-align: left; }
+body.mobile .route-btn span { white-space: normal; font-size: 13px; line-height: 1.35; overflow: visible; word-break: break-all; }
 body.mobile .card .cc { font-size: 12px; }
 body.mobile .card.cooling::after { top: 3px; right: 5px; font-size: 12px; }
 body.mobile .card .cd { height: 5px; }
@@ -275,6 +300,7 @@ body.mobile .pcard { flex: 1; min-width: 0; max-width: 140px; width: auto; paddi
 body.mobile .pcard .pc-name { font-size: 11px; }
 body.mobile .pc-status, body.mobile .pc-f { display: none; }
 body.mobile .pcard .bar { height: 5px; }
+body.mobile .pc-forts { font-size: 10px; }
 body.mobile .timer { padding: 0 8px; display: flex; align-items: center; }
 body.mobile .timer strong { font-size: 18px; }
 body.mobile .timer span { display: none; }
@@ -333,4 +359,8 @@ body.mobile .slot { min-height: 0; padding: 12px; gap: 6px; }
 body.mobile .slot .emblem { width: 36px; height: 36px; }
 body.mobile .slot .pname { font-size: 18px; }
 body.mobile .lobby-hint { font-size: 13px; }
+body.mobile .maps { grid-template-columns: repeat(5, minmax(120px, 1fr)); overflow-x: auto; gap: 8px; }
+body.mobile .map-card { padding: 6px; }
+body.mobile .map-name { font-size: 14px; }
+body.mobile .map-desc { display: none; }
 body.mobile .btn.big { min-height: 48px; font-size: 18px; }

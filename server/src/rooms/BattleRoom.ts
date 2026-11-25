@@ -2,6 +2,7 @@
 import { Room, matchMaker, type Client } from "colyseus";
 import {
   AIR_KINDS,
+  MAPS,
   BUILD_KINDS,
   FACTIONS,
   MAX_PLAYERS,
@@ -75,6 +76,11 @@ export class BattleRoom extends Room<{ state: BattleState }> {
       const f = num(msg?.faction);
       if (p && Number.isInteger(f) && f >= 0 && f < FACTIONS.length && this.factionFree(f)) p.faction = f;
     },
+    setMap: (client: Client, msg: { map?: string }) => {
+      if (!this.isHost(client) || this.state.phase !== "lobby") return;
+      const id = typeof msg?.map === "string" ? msg.map : "random";
+      if (id === "random" || MAPS.some((m) => m.id === id)) this.state.mapChoice = id;
+    },
     start: (client: Client) => {
       if (!this.isHost(client) || this.state.phase !== "lobby") return;
       if (this.state.players.size < MIN_PLAYERS) return this.notice(client, "至少要兩方才能開戰，可以先加電腦");
@@ -86,15 +92,15 @@ export class BattleRoom extends Room<{ state: BattleState }> {
     },
 
     // ---------- 戰鬥指令 ----------
-    spawn: (client: Client, msg: { type?: string; lane?: number }) => {
+    spawn: (client: Client, msg: { type?: string; lane?: number; node?: number }) => {
       const type = msg?.type as UnitType;
       if (!UNIT_TYPES.includes(type)) return;
-      this.reply(client, this.battle.spawn(client.sessionId, type, num(msg?.lane)));
+      this.reply(client, this.battle.spawn(client.sessionId, type, num(msg?.lane), num(msg?.node)));
     },
-    build: (client: Client, msg: { lane?: number; slot?: number; kind?: string }) => {
+    build: (client: Client, msg: { lane?: number; node?: number; slot?: number; kind?: string }) => {
       const kind = msg?.kind as BuildKind;
       if (!BUILD_KINDS.includes(kind)) return;
-      this.reply(client, this.battle.build(client.sessionId, num(msg?.lane), num(msg?.slot), kind));
+      this.reply(client, this.battle.build(client.sessionId, num(msg?.lane), num(msg?.node), num(msg?.slot), kind));
     },
     upgrade: (client: Client, msg: { kind?: string }) => {
       const kind = msg?.kind as UpgradeKind;
@@ -206,12 +212,13 @@ export class BattleRoom extends Room<{ state: BattleState }> {
     this.state.units.clear();
     this.state.structures.clear();
     this.state.aircraft.clear();
+    this.state.nodes.clear();
     // 中途離開、由電腦接手的玩家，回大廳時移除
     const leftovers = [...this.state.players.values()].filter((p) => !p.wasBot && !this.clients.getById(p.id));
     for (const p of leftovers) this.state.players.delete(p.id);
     [...this.state.players.values()].filter((p) => p.name.endsWith("(電腦)")).forEach((p) => this.state.players.delete(p.id));
     this.state.players.forEach((p) => {
-      p.node = -1;
+      p.hq = -1;
       p.alive = true;
       p.rank = 0;
     });

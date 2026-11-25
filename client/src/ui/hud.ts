@@ -19,16 +19,17 @@ import {
   type MapLayout,
 } from "@frontline/shared";
 import { enterFullscreen, exitFullscreen, isFullscreen, isMobile, isStandalone } from "../device";
-import { initAudio, isMuted, play, toggleMute } from "../game/sound";
-import { bus, session } from "../session";
+import { initAudio, isMusicOn, isMuted, play, setMusicIntensity, stopMusic, toggleMusic, toggleMute } from "../game/sound";
+import { bus, session, type Route } from "../session";
 import type { PlayerState } from "../types";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-const LANE_KEYS = ["Q", "W"];
 const svg = (d: string) => `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const ICON_SOUND = svg('<path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/>');
 const ICON_MUTED = svg('<path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l5 6M22 9l-5 6"/>');
+const ICON_MUSIC = svg('<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>');
+const ICON_MUSIC_OFF = svg('<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/><path d="M3 3l18 18"/>');
 const ICON_FS = svg('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>');
 const ICON_FS_EXIT = svg('<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>');
 const setText = (el: Element, t: string) => {
@@ -45,7 +46,7 @@ export class Hud {
   private targetHint = $("target-hint");
   private result = $("result");
   private map: MapLayout | null = null;
-  private mapN = 0;
+  private mapId = "";
   private builtFor = "";
   private toastTimer = 0;
   private lastHq = new Map<string, number>();
@@ -57,16 +58,18 @@ export class Hud {
     this.offs.push(
       bus.on("toast", (t: string) => this.showToast(t)),
       bus.on("banner", (b: { kind: string; text: string; sub?: string; color?: string }) => this.showBanner(b.kind, b.text, b.sub, b.color)),
-      bus.on("laneChanged", () => this.refreshLanes()),
+      bus.on("routeChanged", () => this.renderRoute()),
       bus.on("airMode", () => this.refreshAir()),
-      bus.on("buildMenu", (m: { lane: number; slot: number; x: number; y: number } | null) => this.openBuildMenu(m)),
+      bus.on("buildMenu", (m: { lane: number; node: number; slot: number; x: number; y: number } | null) => this.openBuildMenu(m)),
       bus.on("notice", (m: { text: string }) => {
         this.showToast(m.text);
         play("error", 0.6);
       }),
-      bus.on("airIncoming", (m: { side: number; kind: AirKind; lane: number }) => this.onAirIncoming(m)),
+      bus.on("airIncoming", (m: { owner: string; faction: number; kind: AirKind; lane: number }) => this.onAirIncoming(m)),
       bus.on("eliminated", (m: { name: string; faction: number; by: string; id: string }) => this.onEliminated(m)),
-      bus.on("hqAlert", (m: { side: number; level: number }) => this.onHqAlert(m)),
+      bus.on("hqAlert", (m: { owner: string; level: number }) => this.onHqAlert(m)),
+      bus.on("captured", (m: { node: number; by: string; faction: number }) => this.onCaptured(m)),
+      bus.on("fortFallen", (m: { node: number; owner: string; faction: number; by: string }) => this.onFortFallen(m)),
       bus.on("airDown", (m: { kind: AirKind }) => this.addFeed(`${AIRCRAFT[m.kind].name === "空降" ? "運輸機" : "轟炸機"}被擊落！`, "#ff9a5c")),
       bus.on("newBattle", () => this.resetForBattle()),
     );
@@ -90,9 +93,11 @@ export class Hud {
     this.resultShown = false;
     this.result.classList.add("hidden");
     this.lastHq.clear();
+    this.hpSeen.clear();
+    this.hurtUntil = 0;
     this.feed.innerHTML = "";
     session.airMode = null;
-    session.selectedLane = -1;
+    session.route = null;
   }
 
   // ================================================================ 每一格更新
@@ -101,39 +106,66 @@ export class Hud {
     const s = session.state;
     const me = session.me();
     if (!s || !me) return;
-    if (s.nodeCount !== this.mapN && s.nodeCount >= 2) {
-      this.mapN = s.nodeCount;
-      this.map = buildMap(s.nodeCount);
+    if (!s.mapId) return;
+    if (s.mapId !== this.mapId) {
+      this.mapId = s.mapId;
+      this.map = buildMap(s.mapId);
     }
     if (!this.map) return;
-    const key = `${me.node}:${this.mapN}`;
-    if (this.builtFor !== key) this.buildBottom(me);
+    if (this.builtFor !== this.mapId) this.buildBottom();
+    this.ensureRoute(me);
     this.renderTop(me);
     this.renderBottom(me);
 
+    this.updateMusic(me);
     if (s.phase === "ended" && !this.resultShown) {
       this.resultShown = true;
+      stopMusic(1);
       setTimeout(() => this.showResult(), 1200);
     }
+  }
+
+  /** 配樂強度：平時 0；開打一陣子、自己的據點掉血 → 1；大本營危急或最後一分半 → 2 */
+  private hpSeen = new Map<number, number>();
+  private hurtUntil = 0;
+  private updateMusic(me: PlayerState) {
+    const s = session.state!;
+    if (s.phase !== "playing") return;
+    for (let i = 0; i < s.nodes.length; i++) {
+      const n = s.nodes[i];
+      if (!n || n.owner !== me.id) {
+        this.hpSeen.delete(i);
+        continue;
+      }
+      const prev = this.hpSeen.get(i);
+      if (prev !== undefined && n.hp < prev - 1) this.hurtUntil = s.time + 8;
+      this.hpSeen.set(i, n.hp);
+    }
+    const hq = me.hq >= 0 ? s.nodes[me.hq] : undefined;
+    const hqRatio = hq && hq.owner === me.id ? hq.hp / hq.maxHp : 1;
+    let level = s.time > 150 || s.time < this.hurtUntil ? 1 : 0;
+    if (hqRatio < 0.5 || s.duration - s.time < 90) level = 2;
+    if (!me.alive) level = 0;
+    setMusicIntensity(level);
   }
 
   private renderTop(me: PlayerState) {
     const s = session.state!;
     const players: PlayerState[] = [];
     s.players.forEach((p) => players.push(p));
-    players.sort((a, b) => a.node - b.node);
+    players.sort((a, b) => a.faction - b.faction);
     const cards = players
       .map((p) => {
         const f = FACTIONS[p.faction];
-        const hq = s.structures.get(`hq${p.node}`);
-        const ratio = hq ? hq.hp / hq.maxHp : 0;
+        const hq = p.alive && p.hq >= 0 ? s.nodes[p.hq] : undefined;
+        const ratio = hq && hq.owner === p.id ? hq.hp / hq.maxHp : 0;
         const prev = this.lastHq.get(p.id) ?? ratio;
         this.lastHq.set(p.id, ratio);
         const hit = ratio < prev - 0.002;
         const status = !p.alive ? "已出局" : !p.connected ? "斷線・電腦代管" : p.isBot ? "電腦" : "";
         return `<div class="pcard${p.id === me.id ? " me" : ""}${p.alive ? "" : " out"}">
           <p class="pc-name" style="color:${f.light}"><span class="pc-f">${f.name}・</span>${esc(p.name)}${p.id === me.id ? "（你）" : ""}${status ? ` <span class="pc-status">${status}</span>` : ""}</p>
-          <div class="bar${hit ? " hit" : ""}"><i style="width:${(ratio * 100).toFixed(1)}%;background:${f.bar}"></i></div>
+          <div class="pc-row"><div class="bar${hit ? " hit" : ""}"><i style="width:${(ratio * 100).toFixed(1)}%;background:${f.bar}"></i></div>${p.alive ? `<span class="pc-forts" title="擁有的堡壘數">堡 ${p.forts}</span>` : ""}</div>
         </div>`;
       })
       .join("");
@@ -141,8 +173,9 @@ export class Hud {
       this.top.innerHTML = `<div class="pcards"></div>
         <div class="timer"><strong></strong><span>剩餘時間</span></div>
         <div class="funds"><strong></strong><span class="fsub"></span>
-          <span class="top-btns"><button class="btn small icon" data-act="mute" aria-label="靜音"></button><button class="btn small icon" data-act="fs" aria-label="全螢幕"></button></span></div>`;
+          <span class="top-btns"><button class="btn small icon" data-act="music" aria-label="關配樂"></button><button class="btn small icon" data-act="mute" aria-label="靜音"></button><button class="btn small icon" data-act="fs" aria-label="全螢幕"></button></span></div>`;
       this.top.querySelector<HTMLButtonElement>('[data-act="mute"]')!.onclick = () => toggleMute();
+      this.top.querySelector<HTMLButtonElement>('[data-act="music"]')!.onclick = () => toggleMusic();
       this.top.querySelector<HTMLButtonElement>('[data-act="fs"]')!.onclick = async () => {
         if (isFullscreen()) {
           await exitFullscreen();
@@ -172,6 +205,13 @@ export class Hud {
       mute.innerHTML = muteKey === "on" ? ICON_SOUND : ICON_MUTED;
       mute.setAttribute("aria-label", muteKey === "on" ? "靜音" : "開聲音");
     }
+    const music = this.top.querySelector<HTMLElement>('[data-act="music"]')!;
+    const musicKey = isMusicOn() ? "on" : "off";
+    if (music.dataset.state !== musicKey) {
+      music.dataset.state = musicKey;
+      music.innerHTML = musicKey === "on" ? ICON_MUSIC : ICON_MUSIC_OFF;
+      music.setAttribute("aria-label", musicKey === "on" ? "關配樂" : "開配樂");
+    }
     const fs = this.top.querySelector<HTMLElement>('[data-act="fs"]')!;
     fs.classList.toggle("hidden", isStandalone());
     const fsKey = document.fullscreenElement ? "exit" : "enter";
@@ -182,13 +222,8 @@ export class Hud {
     }
   }
 
-  private buildBottom(me: PlayerState) {
-    this.builtFor = `${me.node}:${this.mapN}`;
-    const lanes = me.node >= 0 && this.map ? nodeLanes(this.map, me.node) : [];
-    if (session.selectedLane < 0 || !lanes.includes(session.selectedLane)) session.selectedLane = lanes[0] ?? -1;
-    const laneBtns = lanes
-      .map((li, i) => `<button class="lane-btn" data-lane="${li}" aria-label="選擇路線 ${i + 1}"><b>${LANE_KEYS[i]}</b><span data-lane-name="${li}"></span></button>`)
-      .join("");
+  private buildBottom() {
+    this.builtFor = this.mapId;
     const units = UNIT_TYPES.map((t) => {
       const d = UNITS[t];
       return `<button class="card" data-unit="${t}" title="${d.short}"><b>${d.hotkey}</b><span class="cn">${d.name}</span><span class="cc">$${d.cost}</span><i class="cd"></i></button>`;
@@ -204,7 +239,9 @@ export class Hud {
     // 桌機：一整排在下方；手機橫向：左欄（路線、空軍、升級）+ 右欄（出兵），由 CSS 切換
     this.bottom.innerHTML = `
       <div class="hud-col left">
-        <div class="hud-group g-lanes"><span class="hud-label">出兵路線</span>${laneBtns}</div>
+        <div class="hud-group g-lanes"><span class="hud-label">出兵路線</span>
+          <button class="lane-btn route-btn" data-act="route-next" aria-label="換下一條出兵路線"><b>W</b><span data-route></span><em class="route-tip">點這裡或點地圖換路線</em></button>
+        </div>
         <div class="hud-group g-air"><span class="hud-label">空軍</span>${air}</div>
         <div class="hud-group g-ups"><span class="hud-label">升級</span>
           <button class="card ups-toggle" data-act="ups"><span class="cn">升級</span><span class="cc" data-ups-lv></span></button>
@@ -214,22 +251,13 @@ export class Hud {
       <div class="hud-col right">
         <div class="hud-group g-units"><span class="hud-label">地面部隊</span>${units}</div>
       </div>`;
-    this.refreshLanes();
+    this.renderRoute();
   }
 
   private renderBottom(me: PlayerState) {
     const s = session.state!;
     const dead = !me.alive || s.phase !== "playing";
     this.bottom.style.opacity = dead ? "0.5" : "1";
-    // 路線名稱：往哪一家打（對方出局後顯示「穿過廢墟」）
-    if (this.map) {
-      this.bottom.querySelectorAll<HTMLElement>("[data-lane-name]").forEach((el) => {
-        const li = Number(el.dataset.laneName);
-        const enemy = session.playerAtNode(otherEnd(this.map!.lanes[li], me.node));
-        const text = !enemy ? "" : enemy.alive ? `往 ${FACTIONS[enemy.faction].name}` : "穿過廢墟";
-        if (el.textContent !== text) el.textContent = text;
-      });
-    }
     UNIT_TYPES.forEach((t, i) => {
       const el = this.bottom.querySelector<HTMLElement>(`[data-unit="${t}"]`);
       if (!el) return;
@@ -272,10 +300,67 @@ export class Hud {
     if (bar) bar.style.width = cooling ? `${Math.max(0, Math.min(1, 1 - left / total)) * 100}%` : "0%";
   }
 
-  private refreshLanes() {
-    this.bottom.querySelectorAll<HTMLElement>("[data-lane]").forEach((el) => {
-      el.classList.toggle("active", Number(el.dataset.lane) === session.selectedLane);
-    });
+  /** 我可以出兵的所有路線：每個自己的據點 × 它連出去的路（大本營排最前面） */
+  private routes(me: PlayerState): Route[] {
+    const s = session.state!;
+    if (!this.map) return [];
+    const out: Route[] = [];
+    const nodes: number[] = [];
+    for (let i = 0; i < s.nodes.length; i++) if (session.ownsNode(i)) nodes.push(i);
+    nodes.sort((a, b) => (a === me.hq ? -1 : b === me.hq ? 1 : a - b));
+    for (const node of nodes) for (const lane of nodeLanes(this.map, node)) out.push({ node, lane });
+    return out;
+  }
+
+  /** 選的路線失效（據點丟了）就自動換一條 */
+  private ensureRoute(me: PlayerState) {
+    const r = session.route;
+    if (r && session.ownsNode(r.node)) return;
+    const list = this.routes(me);
+    const outward = (x: Route) => !session.ownsNode(otherEnd(this.map!.lanes[x.lane], x.node));
+    // 優先：同一個據點通往外面的路 → 同一個據點的其他路 → 任何通往外面的路 → 第一條
+    session.route =
+      list.find((x) => x.node === r?.node && outward(x)) ??
+      list.find((x) => x.node === r?.node) ??
+      list.find(outward) ??
+      list[0] ??
+      null;
+    this.renderRoute();
+  }
+
+  private cycleRoute(step: number) {
+    const me = session.me();
+    if (!me) return;
+    const list = this.routes(me);
+    if (!list.length) return;
+    const r = session.route;
+    const idx = r ? list.findIndex((x) => x.node === r.node && x.lane === r.lane) : -1;
+    session.route = list[(idx + step + list.length) % list.length];
+    bus.emit("routeChanged", session.route);
+    play("click", 0.6);
+  }
+
+  private nodeName(node: number) {
+    const me = session.me();
+    if (me && node === me.hq) return "大本營";
+    const owner = session.ownerOf(node);
+    const nd = this.map?.nodes[node];
+    if (owner && nd?.kind === "hq") return `${FACTIONS[owner.faction].name}大本營`;
+    return nd?.name ?? "";
+  }
+
+  private renderRoute() {
+    const el = this.bottom.querySelector<HTMLElement>("[data-route]");
+    if (!el || !this.map) return;
+    const r = session.route;
+    let text = "沒有可用路線";
+    if (r) {
+      const to = otherEnd(this.map.lanes[r.lane], r.node);
+      const owner = session.ownerOf(to);
+      const tag = !owner ? "無主" : owner.id === session.myId ? "己方" : FACTIONS[owner.faction].name;
+      text = `${this.nodeName(r.node)} → ${this.nodeName(to)}（${tag}）`;
+    }
+    setText(el, text);
   }
 
   private refreshAir() {
@@ -298,7 +383,7 @@ export class Hud {
       play("click");
       return;
     }
-    if (el.dataset.lane) this.selectLane(Number(el.dataset.lane));
+    if (el.dataset.act === "route-next") this.cycleRoute(1);
     else if (el.dataset.unit) this.deploy(el.dataset.unit, el);
     else if (el.dataset.air) this.armAir(el.dataset.air as AirKind);
     else if (el.dataset.up) {
@@ -321,13 +406,11 @@ export class Hud {
       this.openBuildMenu(null);
       return;
     }
-    const lanes = nodeLanes(this.map, me.node);
-    const li = LANE_KEYS.indexOf(k);
-    if (li >= 0 && lanes[li] !== undefined) return this.selectLane(lanes[li]);
+    if (k === "Q") return this.cycleRoute(-1);
+    if (k === "W") return this.cycleRoute(1);
     if (e.key === "Tab") {
       e.preventDefault();
-      const idx = lanes.indexOf(session.selectedLane);
-      return this.selectLane(lanes[(idx + 1) % lanes.length]);
+      return this.cycleRoute(e.shiftKey ? -1 : 1);
     }
     const unit = UNIT_TYPES.find((t) => UNITS[t].hotkey === k);
     if (unit) return this.deploy(unit, this.bottom.querySelector(`[data-unit="${unit}"]`));
@@ -339,18 +422,13 @@ export class Hud {
       play("click");
     }
     if (k === "M") toggleMute();
+    if (k === "N") toggleMusic();
   };
 
-  private selectLane(lane: number) {
-    session.selectedLane = lane;
-    this.refreshLanes();
-    bus.emit("laneChanged", lane);
-    play("click", 0.6);
-  }
-
   private deploy(type: string, el: HTMLElement | null) {
-    if (session.selectedLane < 0) return;
-    session.send("spawn", { type, lane: session.selectedLane });
+    const r = session.route;
+    if (!r) return;
+    session.send("spawn", { type, lane: r.lane, node: r.node });
     el?.classList.remove("flash");
     void el?.offsetWidth;
     el?.classList.add("flash");
@@ -363,7 +441,7 @@ export class Hud {
     play("click");
   }
 
-  private openBuildMenu(m: { lane: number; slot: number; x: number; y: number } | null) {
+  private openBuildMenu(m: { lane: number; node: number; slot: number; x: number; y: number } | null) {
     if (!m) {
       this.buildMenu.classList.add("hidden");
       return;
@@ -374,7 +452,7 @@ export class Hud {
       BUILD_KINDS.map((k) => {
         const d = STRUCTURES[k];
         const poor = (me?.funds ?? 0) < d.cost;
-        return `<button data-build="${k}" data-lane="${m.lane}" data-slot="${m.slot}"${poor ? ' style="opacity:.6"' : ""}><span>${d.name}<br><small style="color:#a89f84;font-weight:500">${d.short}</small></span><em>$${d.cost}</em></button>`;
+        return `<button data-build="${k}" data-lane="${m.lane}" data-node="${m.node}" data-slot="${m.slot}"${poor ? ' style="opacity:.6"' : ""}><span>${d.name}<br><small style="color:#a89f84;font-weight:500">${d.short}</small></span><em>$${d.cost}</em></button>`;
       }).join("");
     const w = 220;
     this.buildMenu.style.left = `${Math.min(window.innerWidth - w - 8, m.x + 12)}px`;
@@ -385,7 +463,7 @@ export class Hud {
   private onBuildClick = (e: MouseEvent) => {
     const el = (e.target as HTMLElement).closest<HTMLElement>("button[data-build]");
     if (!el) return;
-    session.send("build", { kind: el.dataset.build, lane: Number(el.dataset.lane), slot: Number(el.dataset.slot) });
+    session.send("build", { kind: el.dataset.build, lane: Number(el.dataset.lane), node: Number(el.dataset.node), slot: Number(el.dataset.slot) });
     this.buildMenu.classList.add("hidden");
     play("deploy", 0.7);
   };
@@ -418,45 +496,74 @@ export class Hud {
     setTimeout(() => p.remove(), 7000);
   }
 
-  private onAirIncoming(m: { side: number; kind: AirKind; lane: number }) {
+  private onAirIncoming(m: { owner: string; faction: number; kind: AirKind; lane: number }) {
     const me = session.me();
-    const from = session.playerAtNode(m.side);
-    if (!me || !from || !this.map) return;
+    if (!me || !this.map) return;
+    const f = FACTIONS[m.faction];
     const name = m.kind === "bomber" ? "轟炸機" : "運輸機";
-    if (m.side === me.node) {
-      this.addFeed(`${name}起飛！`, FACTIONS[from.faction].light);
+    if (m.owner === me.id) {
+      this.addFeed(`${name}起飛！`, f.light);
       return;
     }
     const lane = this.map.lanes[m.lane];
-    const threatened = lane && (lane.a === me.node || lane.b === me.node);
+    const threatened = !!lane && (session.ownsNode(lane.a) || session.ownsNode(lane.b));
     if (threatened) {
-      this.showBanner("red", m.kind === "bomber" ? "空襲警報！" : "敵軍空降！", `${FACTIONS[from.faction].name}的${name}來了`);
+      this.showBanner("red", m.kind === "bomber" ? "空襲警報！" : "敵軍空降！", `${f.name}的${name}來了`);
       play("siren", 0.8);
     } else {
-      this.addFeed(`${FACTIONS[from.faction].name}出動${name}`, FACTIONS[from.faction].light);
+      this.addFeed(`${f.name}出動${name}`, f.light);
     }
   }
 
   private onEliminated(m: { name: string; faction: number; by: string; id: string }) {
     const f = FACTIONS[m.faction];
     if (m.id === session.myId) {
-      this.showBanner("red", "指揮部淪陷", "你已出局，可以繼續觀戰");
+      this.showBanner("red", "大本營淪陷", "你已出局，可以繼續觀戰");
+      play("defeat", 0.8);
     } else {
       this.showBanner("dark", `<s>${f.name}</s>`, m.by ? `被 ${esc(m.by)} 殲滅` : "已被殲滅", f.light);
     }
     this.addFeed(`${f.name}（${m.name}）出局`, f.light);
   }
 
-  private onHqAlert(m: { side: number; level: number }) {
+  private onHqAlert(m: { owner: string; level: number }) {
     const me = session.me();
-    const p = session.playerAtNode(m.side);
+    const p = session.state?.players.get(m.owner);
     if (!p) return;
-    if (me && m.side === me.node) {
-      this.showBanner("red", m.level >= 2 ? "指揮部岌岌可危！" : "指揮部遭受猛攻！", m.level >= 2 ? "血量剩不到 25%" : "血量剩一半");
+    if (me && m.owner === me.id) {
+      this.showBanner("red", m.level >= 2 ? "大本營岌岌可危！" : "大本營遭受猛攻！", m.level >= 2 ? "血量剩不到 25%" : "血量剩一半");
       play("siren", 0.6);
     } else {
-      this.addFeed(`${FACTIONS[p.faction].name}指揮部血量剩${m.level >= 2 ? "不到 25%" : "一半"}`, FACTIONS[p.faction].light);
+      this.addFeed(`${FACTIONS[p.faction].name}大本營血量剩${m.level >= 2 ? "不到 25%" : "一半"}`, FACTIONS[p.faction].light);
     }
+  }
+
+  private onCaptured(m: { node: number; by: string; faction: number }) {
+    const f = FACTIONS[m.faction];
+    const name = this.map?.nodes[m.node]?.name ?? "堡壘";
+    if (m.by === session.myId) {
+      this.showBanner("gold", `佔領 ${name}！`, "多一個出兵點，軍費收入增加");
+      play("capture", 1);
+    } else {
+      this.addFeed(`${f?.name ?? ""}佔領了${name}`, f?.light);
+      play("capture", 0.35);
+    }
+    this.renderRoute();
+  }
+
+  private onFortFallen(m: { node: number; owner: string; faction: number; by: string }) {
+    const name = this.map?.nodes[m.node]?.name ?? "堡壘";
+    const f = FACTIONS[m.faction];
+    if (m.owner === session.myId) {
+      this.showBanner("red", `${name}失守！`, "派兵奪回來");
+      play("fortLost", 1);
+    } else if (m.by === session.myId) {
+      this.showBanner("gold", `攻破 ${name}！`, "部隊在旁邊站 3 秒就能佔領");
+      play("capture", 0.6);
+    } else {
+      this.addFeed(`${f?.name ?? ""}的${name}被攻破`, f?.light);
+    }
+    this.renderRoute();
   }
 
   // ================================================================ 結算
@@ -474,21 +581,21 @@ export class Hud {
     const rows = players
       .map((p) => {
         const f = FACTIONS[p.faction];
-        return `<tr><td class="rank">${p.rank || "-"}</td><td style="color:${f.light};font-weight:900">${f.name}</td><td>${esc(p.name)}${p.id === me.id ? "（你）" : ""}</td><td>${p.kills}</td><td>${p.deployed}</td><td>$${p.spent.toLocaleString()}</td></tr>`;
+        return `<tr><td class="rank">${p.rank || "-"}</td><td style="color:${f.light};font-weight:900">${f.name}</td><td>${esc(p.name)}${p.id === me.id ? "（你）" : ""}</td><td>${p.kills}</td><td>${p.captures}</td><td>${p.deployed}</td><td>$${p.spent.toLocaleString()}</td></tr>`;
       })
       .join("");
     const isHost = s.hostId === me.id;
     this.result.innerHTML = `<div class="result-box">
       <h2 class="${win ? "" : "lose"}">${title}</h2>
       <p class="reason">${esc(s.endReason)}</p>
-      <table><thead><tr><th>名次</th><th>陣營</th><th>指揮官</th><th>擊殺</th><th>出兵</th><th>花費</th></tr></thead><tbody>${rows}</tbody></table>
+      <table><thead><tr><th>名次</th><th>陣營</th><th>指揮官</th><th>擊殺</th><th>佔領</th><th>出兵</th><th>花費</th></tr></thead><tbody>${rows}</tbody></table>
       <div class="actions">
         ${isHost ? '<button class="btn primary" data-act="again">回到作戰室再戰</button>' : '<p style="margin:0;color:#a89f84">等房主開下一局…</p>'}
         <button class="btn" data-act="leave">離開房間</button>
       </div>
     </div>`;
     this.result.classList.remove("hidden");
-    play(win ? "deploy" : "error", 1);
+    play(win ? "victory" : "defeat", 1);
   }
 
   private onResultClick = (e: MouseEvent) => {

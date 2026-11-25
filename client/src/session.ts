@@ -19,15 +19,20 @@ class Bus {
 
 export const bus = new Bus();
 
+export interface Route {
+  node: number; // 從哪個據點出兵
+  lane: number; // 走哪條路
+}
+
 export const session = {
   room: null as GameRoom | null,
-  selectedLane: -1,
+  route: null as Route | null,
   airMode: null as AirKind | null,
 
   get state(): GameState | null {
     // 剛連上時 state 還是空殼，等第一次同步完（有 players）才算數
     const st = this.room?.state as GameState | undefined;
-    return st && st.players && st.phase ? st : null;
+    return st && st.players && st.phase && st.nodes ? st : null;
   },
   get myId(): string {
     return this.room?.sessionId ?? "";
@@ -35,12 +40,15 @@ export const session = {
   me(): PlayerState | undefined {
     return this.state?.players.get(this.myId);
   },
-  playerAtNode(node: number): PlayerState | undefined {
-    let found: PlayerState | undefined;
-    this.state?.players.forEach((p) => {
-      if (p.node === node) found = p;
-    });
-    return found;
+  /** 這個據點目前屬於誰（無主或被攻破回傳 undefined） */
+  ownerOf(node: number): PlayerState | undefined {
+    const n = this.state?.nodes[node];
+    if (!n || !n.owner || n.hp <= 0) return undefined;
+    return this.state?.players.get(n.owner);
+  },
+  ownsNode(node: number): boolean {
+    const n = this.state?.nodes[node];
+    return !!n && n.owner === this.myId && n.hp > 0;
   },
   send(type: string, payload?: unknown) {
     this.room?.send(type, payload ?? {});
