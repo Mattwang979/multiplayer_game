@@ -66,6 +66,7 @@ export class Fx {
   private gfx: Phaser.GameObjects.Graphics;
   private time = 0;
   private shakeMag = 0;
+  scale = 1; // 手機上特效整體放大
 
   constructor(private scene: Phaser.Scene) {
     this.gfx = scene.add.graphics().setDepth(DEPTH.projectile);
@@ -215,7 +216,7 @@ export class Fx {
   }
 
   tracer(x1: number, y1: number, x2: number, y2: number, heavy = false) {
-    this.tracers.push({ x1, y1, x2, y2, life: 0, max: heavy ? 0.16 : 0.11, width: heavy ? 3 : 1.6, color: heavy ? 0xfff2b0 : 0xffe14d });
+    this.tracers.push({ x1, y1, x2, y2, life: 0, max: heavy ? 0.16 : 0.11, width: (heavy ? 3 : 1.6) * this.scale * this.scale, color: heavy ? 0xfff2b0 : 0xffe14d });
   }
 
   impact(x: number, y: number, size = 1) {
@@ -229,6 +230,7 @@ export class Fx {
 
   /** 爆炸：size 1 = 砲彈，2 = 炸彈，4 = 指揮部。五個階段：爆閃 → 火球 → 衝擊波 → 濃煙 → 焦痕 */
   explosion(x: number, y: number, size = 1) {
+    size *= this.scale;
     const sq = Math.sqrt(size);
     // 1. 星芒爆閃
     this.spawn("flashstar", x, y, { life: 0.13, s0: 0.35 * size, s1: 0.75 * size, a0: 1, a1: 0, rot: rnd(0, 1), depth: DEPTH.groundFx + 4 });
@@ -275,7 +277,7 @@ export class Fx {
     }
     // 5. 焦痕與彈坑
     this.scorch(x, y, 0.3 * size + 0.2);
-    this.shake(0.0028 * size);
+    this.shake((0.0028 * size) / this.scale);
   }
 
   scorch(x: number, y: number, scale: number, seconds = 25) {

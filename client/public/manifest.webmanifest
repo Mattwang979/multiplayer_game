@@ -1,0 +1,18 @@
+{
+  "name": "前線 Frontline — 二戰多人混戰",
+  "short_name": "前線",
+  "description": "二戰俯視角多人推線對戰，2–4 人混戰。",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
+  "background_color": "#0e0f0b",
+  "theme_color": "#0e0f0b",
+  "lang": "zh-Hant",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

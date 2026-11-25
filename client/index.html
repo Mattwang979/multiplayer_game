@@ -2,8 +2,16 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>前線 Frontline — 二戰多人混戰</title>
+  <meta name="theme-color" content="#0e0f0b" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="前線" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icon-180.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Noto+Sans+TC:wght@500;700;900&display=swap" rel="stylesheet" />
@@ -25,6 +33,7 @@
         <div class="home-actions">
           <button id="btn-create" class="btn primary">建立房間</button>
           <button id="btn-practice" class="btn">單人練習（對兩個電腦）</button>
+          <button id="btn-fullscreen" class="btn mobile-only">全螢幕橫向遊玩</button>
         </div>
         <div class="join-row">
           <label class="field grow">
@@ -72,9 +81,14 @@
       <div id="banner" class="banner" aria-live="assertive"></div>
       <div id="toast" class="toast" role="status"></div>
       <div id="build-menu" class="build-menu hidden"></div>
-      <div id="target-hint" class="target-hint hidden"></div>
+      <div id="target-hint" class="target-hint hidden"><span id="target-text"></span><button id="target-cancel" class="btn small">取消</button></div>
       <div id="hud-bottom" class="hud-bottom"></div>
       <div id="result" class="result hidden"></div>
+      <div id="rotate-hint" class="rotate-hint" role="alert">
+        <svg viewBox="0 0 64 64" width="88" height="88" aria-hidden="true"><rect x="20" y="6" width="24" height="44" rx="4" fill="none" stroke="#f2c14e" stroke-width="4"/><path d="M10 40 a24 24 0 0 0 30 18" fill="none" stroke="#ece4cf" stroke-width="4"/><path d="M36 52 l6 6 -8 3" fill="none" stroke="#ece4cf" stroke-width="4"/></svg>
+        <p>請把手機轉成橫向</p>
+        <small>iPhone 轉了沒反應的話，請先關掉「螢幕方向鎖定」</small>
+      </div>
     </section>
   </div>
   <script type="module" src="/src/main.ts"></script>

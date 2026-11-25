@@ -24,8 +24,12 @@ import type { AircraftState, StructureState, UnitState } from "../types";
 import { DEPTH, FIRE_RAMP, Fx, rnd } from "./fx";
 import { play } from "./sound";
 import { makeTextures } from "./textures";
+import { isMobile } from "../device";
 
-const UNIT_SCALE = 1.2; // 部隊畫大一點比較好認
+// 手機畫面小，部隊、工事、字都放大一點比較好認
+const M = () => isMobile();
+const UNIT_SCALE_DESKTOP = 1.2;
+const UNIT_SCALE_MOBILE = 1.75;
 
 // 部隊隊形（本地座標，朝右）
 const FORMATION: Record<string, [number, number][]> = {
@@ -100,6 +104,7 @@ export class BattleScene extends Phaser.Scene {
   private lastShare: number[] = [];
   private breakthroughCd = 0;
   private offs: (() => void)[] = [];
+  private unitScale = UNIT_SCALE_DESKTOP;
 
   constructor() {
     super("battle");
@@ -107,8 +112,10 @@ export class BattleScene extends Phaser.Scene {
 
   create() {
     makeTextures(this);
+    this.unitScale = M() ? UNIT_SCALE_MOBILE : UNIT_SCALE_DESKTOP;
     this.cameras.main.setBackgroundColor("#7f9a4e");
     this.fx = new Fx(this);
+    this.fx.scale = M() ? 1.3 : 1;
     this.territory = this.add.graphics().setDepth(DEPTH.territory);
     this.bars = this.add.graphics().setDepth(DEPTH.bars);
     this.crosshair = this.add.image(0, 0, "target").setDepth(DEPTH.overlay).setVisible(false);
@@ -340,8 +347,8 @@ export class BattleScene extends Phaser.Scene {
 
   private makeUnit(u: UnitState): UnitView {
     const faction = this.factionOf(u.side);
-    const c = this.add.container(0, 0).setDepth(DEPTH.unit).setScale(UNIT_SCALE);
-    const shadow = this.add.image(0, 0, "shadow").setDepth(DEPTH.unitShadow).setScale(u.type === "tank" ? 1 : 0.7);
+    const c = this.add.container(0, 0).setDepth(DEPTH.unit).setScale(this.unitScale);
+    const shadow = this.add.image(0, 0, "shadow").setDepth(DEPTH.unitShadow).setScale((u.type === "tank" ? 1 : 0.7) * (this.unitScale / UNIT_SCALE_DESKTOP));
     const men: Phaser.GameObjects.Image[] = [];
     const v: UnitView = {
       c, men, shadow, x: u.x, lane: u.lane, shots: u.shots, hp: u.hp, maxHp: u.maxHp, type: u.type, faction,
@@ -401,12 +408,12 @@ export class BattleScene extends Phaser.Scene {
         if (left > 0) {
           const k = Math.min(1, left / 1.6);
           v.chute.setVisible(true).setPosition(p.x, p.y - 10 * k).setScale(0.6 + 0.9 * k).setRotation(Math.sin(this.clock * 3 + u.x) * 0.15);
-          v.c.setScale(UNIT_SCALE * (0.7 + 0.3 * (1 - k))).setAlpha(0.85);
+          v.c.setScale(this.unitScale * (0.7 + 0.3 * (1 - k))).setAlpha(0.85);
           v.shadow.setScale(0.3 + 0.4 * (1 - k)).setAlpha(0.6);
         } else {
           v.chute.destroy();
           v.chute = undefined;
-          v.c.setScale(UNIT_SCALE).setAlpha(1);
+          v.c.setScale(this.unitScale).setAlpha(1);
           v.shadow.setScale(0.7).setAlpha(1);
           this.fx.dustRing(p.x, p.y, 0.6);
         }
@@ -605,18 +612,22 @@ export class BattleScene extends Phaser.Scene {
       angle = p.angle + (nodeDir(lane, st.side) < 0 ? Math.PI : 0);
     }
     const tex = st.kind === "hq" ? `hq${faction}` : `${st.kind}${faction}`;
-    const img = this.add.image(wx, wy, tex).setDepth(DEPTH.structure).setRotation(st.kind === "aa" || st.kind === "hq" ? 0 : angle);
+    const img = this.add
+      .image(wx, wy, tex)
+      .setDepth(DEPTH.structure)
+      .setRotation(st.kind === "aa" || st.kind === "hq" ? 0 : angle)
+      .setScale(M() ? (st.kind === "hq" ? 1.15 : 1.35) : 1);
     const v: StructView = { img, shots: st.shots, airShots: st.airShots, hp: st.hp, maxHp: st.maxHp, kind: st.kind, wx, wy, angle, name: "" };
-    if (st.kind === "aa") v.gun = this.add.image(wx, wy, "aagun").setOrigin(6 / 30, 0.5).setDepth(DEPTH.structure + 1).setRotation(-Math.PI / 4);
+    if (st.kind === "aa") v.gun = this.add.image(wx, wy, "aagun").setOrigin(6 / 30, 0.5).setDepth(DEPTH.structure + 1).setRotation(-Math.PI / 4).setScale(M() ? 1.35 : 1);
     if (st.kind === "hq") {
       const p = session.playerAtNode(st.side);
       v.name = p?.name ?? "";
       const isMe = p?.id === session.myId;
       const below = wy < this.map.center.y; // 上半部的指揮部把名字放下面，免得被介面擋住
       v.label = this.add
-        .text(wx, below ? wy + 82 : wy - 82, `${FACTIONS[faction].name}・${v.name}${isMe ? "（你）" : ""}`, {
+        .text(wx, below ? wy + (M() ? 96 : 82) : wy - (M() ? 96 : 82), `${FACTIONS[faction].name}・${v.name}${isMe ? "（你）" : ""}`, {
           fontFamily: '"Noto Sans TC", sans-serif',
-          fontSize: "18px",
+          fontSize: M() ? "32px" : "18px",
           fontStyle: "900",
           color: "#ffffff",
           stroke: "#1d1d17",
@@ -664,7 +675,7 @@ export class BattleScene extends Phaser.Scene {
         const tex = a.kind === "bomber" ? `bomber${f}` : `transport${f}`;
         v = {
           img: this.add.image(a.x, a.y, tex).setDepth(DEPTH.air),
-          shadow: this.add.image(a.x, a.y, tex).setDepth(DEPTH.airShadow).setTint(0x000000).setAlpha(0.22).setScale(0.8),
+          shadow: this.add.image(a.x, a.y, tex).setDepth(DEPTH.airShadow).setTint(0x000000).setAlpha(0.22).setScale(M() ? 1.0 : 0.8),
           x: a.x, y: a.y, dropped: a.dropped, smokeT: 0, kind: a.kind,
         };
         this.planes.set(a.id, v);
@@ -672,7 +683,7 @@ export class BattleScene extends Phaser.Scene {
       }
       v.x += (a.x - v.x) * Math.min(1, dt * 10);
       v.y += (a.y - v.y) * Math.min(1, dt * 10);
-      const bob = 1 + Math.sin(this.clock * 2 + a.x * 0.01) * 0.015;
+      const bob = (M() ? 1.25 : 1) * (1 + Math.sin(this.clock * 2 + a.x * 0.01) * 0.015);
       v.img.setPosition(v.x, v.y).setRotation(a.angle).setScale(bob);
       v.shadow.setPosition(v.x + 40, v.y + 56).setRotation(a.angle);
       if (a.dropped && !v.dropped) {
@@ -851,21 +862,22 @@ export class BattleScene extends Phaser.Scene {
   private drawBars() {
     const g = this.bars;
     g.clear();
+    const th = M() ? 7 : 4;
     const bar = (x: number, y: number, w: number, ratio: number, color: number) => {
       g.fillStyle(0x1d1d17, 0.85);
-      g.fillRect(x - w / 2 - 1, y - 1, w + 2, 6);
+      g.fillRect(x - w / 2 - 1, y - 1, w + 2, th + 2);
       g.fillStyle(color, 1);
-      g.fillRect(x - w / 2, y, w * Math.max(0, ratio), 4);
+      g.fillRect(x - w / 2, y, w * Math.max(0, ratio), th);
     };
     const hpColor = (r: number) => (r > 0.6 ? 0x7ed957 : r > 0.3 ? 0xffd34a : 0xff5a3c);
     this.units.forEach((v) => {
       const r = v.maxHp > 0 ? v.hp / v.maxHp : 0;
-      if (r < 0.999) bar(v.wx, v.wy - 22, 22, r, hpColor(r));
+      if (r < 0.999) bar(v.wx, v.wy - 22 * (this.unitScale / UNIT_SCALE_DESKTOP), M() ? 34 : 22, r, hpColor(r));
     });
     this.structs.forEach((v) => {
       const r = v.maxHp > 0 ? v.hp / v.maxHp : 0;
       if (v.kind === "hq") {
-        const by = v.wy < this.map.center.y ? v.wy + 58 : v.wy - 66;
+        const by = v.wy < this.map.center.y ? v.wy + (M() ? 66 : 58) : v.wy - (M() ? 76 : 66);
         g.fillStyle(0x1d1d17, 0.9);
         g.fillRect(v.wx - 51, by, 102, 12);
         g.fillStyle(hpColor(r), 1);
@@ -887,7 +899,7 @@ export class BattleScene extends Phaser.Scene {
         BUILD_SLOTS.forEach((dist, slot) => {
           const x = nodeEnd(lane, me.node) + nodeDir(lane, me.node) * dist;
           const p = laneOffsetPoint(lane, x, slot === 0 ? 46 : -46);
-          const img = this.add.image(p.x, p.y, "slot").setDepth(DEPTH.slot);
+          const img = this.add.image(p.x, p.y, "slot").setDepth(DEPTH.slot).setScale(M() ? 1.5 : 1);
           this.slots.push({ img, lane: li, slot, wx: p.x, wy: p.y });
         });
       }
@@ -954,7 +966,7 @@ export class BattleScene extends Phaser.Scene {
     }
     if (session.airMode) {
       const hit = nearestLanePos(this.map, p.worldX, p.worldY);
-      if (hit.dist > 90) {
+      if (hit.dist > (M() ? 150 : 90)) {
         bus.emit("toast", "請點在道路上");
         return;
       }
@@ -964,11 +976,14 @@ export class BattleScene extends Phaser.Scene {
       this.crosshair.setVisible(false);
       return;
     }
-    const ev = p.event as MouseEvent;
+    // 換算成網頁座標（觸控事件沒有 clientX，所以用畫布位置算）
+    const rect = this.game.canvas.getBoundingClientRect();
+    const sx = rect.left + (p.x / WORLD_W) * rect.width;
+    const sy = rect.top + (p.y / WORLD_H) * rect.height;
     for (const sl of this.slots) {
       if (!sl.img.visible) continue;
-      if (Math.hypot(p.worldX - sl.wx, p.worldY - sl.wy) < 24) {
-        bus.emit("buildMenu", { lane: sl.lane, slot: sl.slot, x: ev.clientX, y: ev.clientY });
+      if (Math.hypot(p.worldX - sl.wx, p.worldY - sl.wy) < (M() ? 44 : 24)) {
+        bus.emit("buildMenu", { lane: sl.lane, slot: sl.slot, x: sx, y: sy });
         return;
       }
     }
@@ -976,7 +991,7 @@ export class BattleScene extends Phaser.Scene {
     const me = session.me();
     if (!me) return;
     const hit = nearestLanePos(this.map, p.worldX, p.worldY);
-    if (hit.dist < 70 && nodeLanes(this.map, me.node).includes(hit.lane)) {
+    if (hit.dist < (M() ? 110 : 70) && nodeLanes(this.map, me.node).includes(hit.lane)) {
       session.selectedLane = hit.lane;
       bus.emit("laneChanged", hit.lane);
     }

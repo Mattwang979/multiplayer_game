@@ -18,6 +18,7 @@ import {
   type AirKind,
   type MapLayout,
 } from "@frontline/shared";
+import { enterFullscreen, exitFullscreen, isFullscreen, isMobile, isStandalone } from "../device";
 import { initAudio, isMuted, play, toggleMute } from "../game/sound";
 import { bus, session } from "../session";
 import type { PlayerState } from "../types";
@@ -25,6 +26,11 @@ import type { PlayerState } from "../types";
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 const LANE_KEYS = ["Q", "W"];
+const svg = (d: string) => `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const ICON_SOUND = svg('<path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/>');
+const ICON_MUTED = svg('<path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l5 6M22 9l-5 6"/>');
+const ICON_FS = svg('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>');
+const ICON_FS_EXIT = svg('<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>');
 const setText = (el: Element, t: string) => {
   if (el.textContent !== t) el.textContent = t;
 };
@@ -68,6 +74,10 @@ export class Hud {
     this.bottom.addEventListener("click", this.onClick);
     this.buildMenu.addEventListener("click", this.onBuildClick);
     this.result.addEventListener("click", this.onResultClick);
+    $("target-cancel").addEventListener("click", () => {
+      session.airMode = null;
+      bus.emit("airMode", null);
+    });
   }
 
   destroy() {
@@ -122,7 +132,7 @@ export class Hud {
         const hit = ratio < prev - 0.002;
         const status = !p.alive ? "已出局" : !p.connected ? "斷線・電腦代管" : p.isBot ? "電腦" : "";
         return `<div class="pcard${p.id === me.id ? " me" : ""}${p.alive ? "" : " out"}">
-          <p class="pc-name" style="color:${f.light}">${f.name}・${esc(p.name)}${p.id === me.id ? "（你）" : ""}${status ? ` <span style="color:#a89f84;font-weight:500">${status}</span>` : ""}</p>
+          <p class="pc-name" style="color:${f.light}"><span class="pc-f">${f.name}・</span>${esc(p.name)}${p.id === me.id ? "（你）" : ""}${status ? ` <span class="pc-status">${status}</span>` : ""}</p>
           <div class="bar${hit ? " hit" : ""}"><i style="width:${(ratio * 100).toFixed(1)}%;background:${f.bar}"></i></div>
         </div>`;
       })
@@ -130,8 +140,17 @@ export class Hud {
     if (!this.top.querySelector(".pcards")) {
       this.top.innerHTML = `<div class="pcards"></div>
         <div class="timer"><strong></strong><span>剩餘時間</span></div>
-        <div class="funds"><strong></strong><span class="fsub"></span> <button class="btn small" data-act="mute" style="min-height:28px"></button></div>`;
+        <div class="funds"><strong></strong><span class="fsub"></span>
+          <span class="top-btns"><button class="btn small icon" data-act="mute" aria-label="靜音"></button><button class="btn small icon" data-act="fs" aria-label="全螢幕"></button></span></div>`;
       this.top.querySelector<HTMLButtonElement>('[data-act="mute"]')!.onclick = () => toggleMute();
+      this.top.querySelector<HTMLButtonElement>('[data-act="fs"]')!.onclick = async () => {
+        if (isFullscreen()) {
+          await exitFullscreen();
+          return;
+        }
+        const tip = await enterFullscreen();
+        if (tip) this.showToast(tip, 5000);
+      };
     }
     const pc = this.top.querySelector<HTMLElement>(".pcards")!;
     if (pc.dataset.html !== cards) {
@@ -145,8 +164,22 @@ export class Hud {
     timer.classList.toggle("urgent", left < 60);
     setText(timer.querySelector("strong")!, `${mm}:${ss}`);
     setText(this.top.querySelector(".funds strong")!, `$${me.funds.toLocaleString()}`);
-    setText(this.top.querySelector(".fsub")!, `軍費 +${me.income.toFixed(1)}/秒・部隊 ${me.unitCount}/${MAX_UNITS_PER_PLAYER}`);
-    setText(this.top.querySelector('[data-act="mute"]')!, isMuted() ? "開聲音" : "靜音");
+    setText(this.top.querySelector(".fsub")!, isMobile() ? `+${me.income.toFixed(1)}/秒` : `軍費 +${me.income.toFixed(1)}/秒・部隊 ${me.unitCount}/${MAX_UNITS_PER_PLAYER}`);
+    const mute = this.top.querySelector<HTMLElement>('[data-act="mute"]')!;
+    const muteKey = isMuted() ? "off" : "on";
+    if (mute.dataset.state !== muteKey) {
+      mute.dataset.state = muteKey;
+      mute.innerHTML = muteKey === "on" ? ICON_SOUND : ICON_MUTED;
+      mute.setAttribute("aria-label", muteKey === "on" ? "靜音" : "開聲音");
+    }
+    const fs = this.top.querySelector<HTMLElement>('[data-act="fs"]')!;
+    fs.classList.toggle("hidden", isStandalone());
+    const fsKey = document.fullscreenElement ? "exit" : "enter";
+    if (fs.dataset.state !== fsKey) {
+      fs.dataset.state = fsKey;
+      fs.innerHTML = fsKey === "enter" ? ICON_FS : ICON_FS_EXIT;
+      fs.setAttribute("aria-label", fsKey === "enter" ? "全螢幕" : "離開全螢幕");
+    }
   }
 
   private buildBottom(me: PlayerState) {
@@ -168,11 +201,19 @@ export class Hud {
       const d = UPGRADES[k];
       return `<button class="card up" data-up="${k}" title="${d.short}"><b>${d.hotkey}</b><span class="cn" data-up-name="${k}">${d.name}</span><span class="cc" data-up-cost="${k}"></span></button>`;
     }).join("");
+    // 桌機：一整排在下方；手機橫向：左欄（路線、空軍、升級）+ 右欄（出兵），由 CSS 切換
     this.bottom.innerHTML = `
-      <div class="hud-group"><span class="hud-label">出兵路線</span>${laneBtns}</div>
-      <div class="hud-group"><span class="hud-label">地面部隊</span>${units}</div>
-      <div class="hud-group"><span class="hud-label">空軍</span>${air}</div>
-      <div class="hud-group right"><span class="hud-label">升級</span>${ups}</div>`;
+      <div class="hud-col left">
+        <div class="hud-group g-lanes"><span class="hud-label">出兵路線</span>${laneBtns}</div>
+        <div class="hud-group g-air"><span class="hud-label">空軍</span>${air}</div>
+        <div class="hud-group g-ups"><span class="hud-label">升級</span>
+          <button class="card ups-toggle" data-act="ups"><span class="cn">升級</span><span class="cc" data-ups-lv></span></button>
+          <div class="ups-pop">${ups}</div>
+        </div>
+      </div>
+      <div class="hud-col right">
+        <div class="hud-group g-units"><span class="hud-label">地面部隊</span>${units}</div>
+      </div>`;
     this.refreshLanes();
   }
 
@@ -205,6 +246,8 @@ export class Hud {
       this.cardState(el, me.funds < d.cost, left, d.cooldown);
       el.classList.toggle("armed", session.airMode === k);
     });
+    const lv = this.bottom.querySelector<HTMLElement>("[data-ups-lv]");
+    if (lv) setText(lv, `Lv ${me.firepower}/${me.armor}/${me.logistics}`);
     UPGRADE_KINDS.forEach((k) => {
       const lvl = me[k];
       const name = this.bottom.querySelector<HTMLElement>(`[data-up-name="${k}"]`);
@@ -238,7 +281,10 @@ export class Hud {
   private refreshAir() {
     const mode = session.airMode;
     this.targetHint.classList.toggle("hidden", !mode);
-    if (mode) this.targetHint.textContent = `${mode === "bomber" ? "轟炸機" : "運輸機"}待命：點地圖上任一條道路下令，右鍵或 Esc 取消`;
+    if (mode)
+      $("target-text").textContent = isMobile()
+        ? `${mode === "bomber" ? "轟炸機" : "運輸機"}待命：點任一條道路下令`
+        : `${mode === "bomber" ? "轟炸機" : "運輸機"}待命：點地圖上任一條道路下令（右鍵或 Esc 取消）`;
   }
 
   // ================================================================ 操作
@@ -247,6 +293,11 @@ export class Hud {
     initAudio();
     const el = (e.target as HTMLElement).closest<HTMLElement>("button");
     if (!el) return;
+    if (el.dataset.act === "ups") {
+      this.bottom.querySelector(".g-ups")?.classList.toggle("open");
+      play("click");
+      return;
+    }
     if (el.dataset.lane) this.selectLane(Number(el.dataset.lane));
     else if (el.dataset.unit) this.deploy(el.dataset.unit, el);
     else if (el.dataset.air) this.armAir(el.dataset.air as AirKind);
@@ -254,6 +305,7 @@ export class Hud {
       session.send("upgrade", { kind: el.dataset.up });
       play("click");
     }
+    if (!el.dataset.up) this.bottom.querySelector(".g-ups")?.classList.remove("open");
   };
 
   private onKey = (e: KeyboardEvent) => {
@@ -340,11 +392,11 @@ export class Hud {
 
   // ================================================================ 提示
 
-  showToast(text: string) {
+  showToast(text: string, ms = 1800) {
     this.toast.textContent = text;
     this.toast.classList.add("show");
     clearTimeout(this.toastTimer);
-    this.toastTimer = window.setTimeout(() => this.toast.classList.remove("show"), 1800);
+    this.toastTimer = window.setTimeout(() => this.toast.classList.remove("show"), ms);
   }
 
   showBanner(kind: string, text: string, sub?: string, color?: string) {

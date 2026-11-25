@@ -2,6 +2,7 @@
 import "./style.css";
 import Phaser from "phaser";
 import { WORLD_H, WORLD_W } from "@frontline/shared";
+import { canFullscreen, enterFullscreen, isMobile, updateDeviceClass } from "./device";
 import { BattleScene } from "./game/BattleScene";
 import { initAudio, play } from "./game/sound";
 import { createRoom, errorText, forgetRoom, joinRoom, rememberRoom, tryReconnect, type GameRoom } from "./net";
@@ -105,6 +106,8 @@ function playerName() {
 
 async function withBusy(btn: HTMLButtonElement, fn: () => Promise<void>) {
   initAudio();
+  // 手機上按下開始時順便進全螢幕（Android 可以；iPhone 要從主畫面開）
+  if (isMobile() && canFullscreen()) void enterFullscreen();
   play("click");
   homeError("");
   document.querySelectorAll<HTMLButtonElement>("#screen-home button").forEach((b) => (b.disabled = true));
@@ -148,6 +151,17 @@ function bindHome() {
     if ((e as KeyboardEvent).key === "Enter") join($("btn-join") as HTMLButtonElement);
   });
   $("btn-leave").addEventListener("click", () => leaveRoom());
+  $("btn-fullscreen").addEventListener("click", async () => {
+    initAudio();
+    const tip = await enterFullscreen();
+    homeError(tip ?? "");
+  });
+}
+
+function onResize() {
+  updateDeviceClass();
+  // 版面（左右欄）變了，Phaser 要重新量一次畫布大小
+  requestAnimationFrame(() => game?.scale.refresh());
 }
 
 // ---------------------------------------------------------------- 啟動
@@ -162,6 +176,10 @@ function loop() {
 }
 
 async function boot() {
+  updateDeviceClass();
+  window.addEventListener("resize", onResize);
+  window.addEventListener("orientationchange", () => setTimeout(onResize, 200));
+  document.addEventListener("fullscreenchange", onResize);
   bindHome();
   bindLobbyActions();
   showScreen("home");
