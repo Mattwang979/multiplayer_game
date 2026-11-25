@@ -18,15 +18,17 @@ export const GARRISON_CAP: Record<string, number> = { hq: 24, bigfort: 16, fort:
 export const RELEASE_INTERVAL = 0.45; // 一次派出很多兵時，每支部隊出門的間隔（秒）
 export const GARRISON_HEAL = 0.05; // 駐紮在據點裡每秒回復最大血量的 5%
 export const GARRISON_FIRE_BONUS = 0.04; // 據點火力：每 1 人口駐軍 +4%
-export const GARRISON_FIRE_MAX = 0.8; // 最多 +80%
+export const GARRISON_FIRE_MAX = 0.5; // 最多 +50%
 export const RETREAT_SPEED = 1.25; // 撤退時移動速度倍率（撤退中不會開火）
 export const MAX_ORDER_UNITS = 80; // 一次指令最多帶幾支部隊
 
-// 養兵費：堡壘裡囤的兵越多，每人口的養兵費越貴（在野外作戰的部隊不用養兵費）
+// 養兵費：野外的兵每人口固定收費；堡壘裡囤的兵越多，每人口越貴（逼你把兵派出去用）
+export const FIELD_UPKEEP_PER_POP = 0.06;
 export const UPKEEP_PER_POP = 0.1;
 export const UPKEEP_SCALE = 12;
-export function upkeepFor(garrisonPop: number) {
-  return garrisonPop <= 0 ? 0 : UPKEEP_PER_POP * garrisonPop * (1 + garrisonPop / UPKEEP_SCALE);
+export function upkeepFor(garrisonPop: number, fieldPop = 0) {
+  const g = garrisonPop <= 0 ? 0 : UPKEEP_PER_POP * garrisonPop * (1 + garrisonPop / UPKEEP_SCALE);
+  return g + Math.max(0, fieldPop) * FIELD_UPKEEP_PER_POP;
 }
 
 // ---------- 經濟 ----------
@@ -100,6 +102,7 @@ export interface UnitDef {
   damage: number;
   cooldown: number; // 射擊間隔（秒）
   range: number;
+  minRange?: number; // 最小射程：比這更近的敵人打不到（砲兵）
   speed: number; // 每秒移動距離
   armor: ArmorClass;
   weapon: WeaponClass;
@@ -129,8 +132,8 @@ export const UNITS: Record<UnitType, UnitDef> = {
     range: 115, speed: 27, armor: "hard", weapon: "cannon", members: 1, hotkey: "4",
   },
   artillery: {
-    name: "砲兵", short: "遠程範圍傷害，怕近身", cost: 180, pop: 2, hp: 70, damage: 30, cooldown: 4.0,
-    range: 200, speed: 18, armor: "soft", weapon: "shell", members: 2, splash: 32, hotkey: "5",
+    name: "砲兵", short: "遠程範圍傷害，70 以內打不到", cost: 180, pop: 2, hp: 70, damage: 30, cooldown: 4.0,
+    range: 200, minRange: 70, speed: 18, armor: "soft", weapon: "shell", members: 2, splash: 32, hotkey: "5",
   },
   engineer: {
     name: "工兵", short: "近身爆破堡壘，修理己方建築與戰車", cost: 90, pop: 1, hp: 90, damage: 30, cooldown: 1.5,

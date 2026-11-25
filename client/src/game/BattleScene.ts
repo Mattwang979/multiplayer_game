@@ -48,17 +48,29 @@ const FORMATION: Record<string, [number, number][]> = {
 };
 const MAN_TEX: Record<string, string> = { engineer: "engineer", medic: "medic" };
 
-/** 拖曳派兵／調度中的狀態 */
+/**
+ * 按下去之後的狀態：
+ * - dispatch：從自己據點拖出去派兵（點一下 = 選據點）
+ * - order：拖曳自己的部隊改目的地（點一下 = 選這一隊）
+ * - pan：拖空地移動畫面（點一下 = 選著部隊時派去那裡、不然取消選取）
+ * - slot：點路邊的 ＋ 開工事選單（拖曳 = 移動畫面）
+ */
 interface Drag {
-  kind: "dispatch" | "order";
+  kind: "dispatch" | "order" | "pan" | "slot";
   node: number; // dispatch：從哪個據點
   units: string[]; // order：哪些部隊
+  slot: number; // slot：this.slots 的索引
   startX: number;
   startY: number;
+  lastX: number;
+  lastY: number;
   active: boolean; // 拖超過門檻才算拖曳（不然是點一下）
   via: number[];
   dest: Dest | null;
 }
+
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 3.2;
 
 interface UnitView {
   c: Phaser.GameObjects.Container;
@@ -131,6 +143,9 @@ export class BattleScene extends Phaser.Scene {
   private preview!: Phaser.GameObjects.Graphics;
   private previewText!: Phaser.GameObjects.Text;
   private drag: Drag | null = null;
+  private pinch: { dist: number; zoom: number; wx: number; wy: number } | null = null;
+  private gesture = false; // 雙指手勢進行中：放開前不當成點擊
+  private zoomBtn: HTMLElement | null = null;
   private clock = 0;
   private unitScale = UNIT_SCALE_DESKTOP;
   private offs: (() => void)[] = [];
@@ -162,10 +177,20 @@ export class BattleScene extends Phaser.Scene {
       .setDepth(DEPTH.overlay + 1)
       .setVisible(false);
 
+    this.input.addPointer(2);
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => this.onPointerDown(p));
     this.input.on("pointermove", (p: Phaser.Input.Pointer) => this.onPointerMove(p));
     this.input.on("pointerup", (p: Phaser.Input.Pointer) => this.onPointerUp(p));
     this.input.on("pointerupoutside", (p: Phaser.Input.Pointer) => this.onPointerUp(p));
+    this.input.on("wheel", (p: Phaser.Input.Pointer, _o: unknown, _dx: number, dy: number) => {
+      const w = this.toWorld(p.x, p.y);
+      this.setView(this.cameras.main.zoom * (dy > 0 ? 0.87 : 1.15), w.x, w.y, p.x, p.y);
+    });
+    // 「全圖」按鈕：放大後才出現
+    this.zoomBtn = document.getElementById("btn-zoom");
+    const resetZoom = () => this.setView(1, WORLD_W / 2, WORLD_H / 2, WORLD_W / 2, WORLD_H / 2);
+    this.zoomBtn?.addEventListener("click", resetZoom);
+    this.events.once("shutdown", () => this.zoomBtn?.removeEventListener("click", resetZoom));
 
     this.offs.push(
       bus.on("bomb", (m: { lane: number; x: number }) => this.onBomb(m)),
@@ -218,6 +243,7 @@ export class BattleScene extends Phaser.Scene {
     this.ground?.destroy();
     this.ground = this.add.image(0, 0, key).setOrigin(0).setDepth(DEPTH.ground);
     this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H);
+    this.setView(1, WORLD_W / 2, WORLD_H / 2, WORLD_W / 2, WORLD_H / 2);
 
     this.map.nodes.forEach((nd) => {
       const img = this.add.image(nd.x, nd.y, "fortNeutral").setDepth(DEPTH.structure);
@@ -1347,36 +1373,113 @@ export class BattleScene extends Phaser.Scene {
 
   // ---------------------------------------------------------------- 輸入
 
-  // 點擊／拖曳：
+  // ================================================================ 鏡頭（雙指縮放、拖空地移動、滾輪縮放）
+
+  /** 螢幕（遊戲畫布）座標 → 世界座標 */
+  private toWorld(sx: number, sy: number) {
+    const cam = this.cameras.main;
+    return {
+      x: (sx - cam.width / 2) / cam.zoom + cam.scrollX + cam.width / 2,
+      y: (sy - cam.height / 2) / cam.zoom + cam.scrollY + cam.height / 2,
+    };
+  }
+
+  /** 縮放到 zoom，並讓世界座標 (wx, wy) 留在畫布座標 (sx, sy) 底下 */
+  private setView(zoom: number, wx: number, wy: number, sx: number, sy: number) {
+    const cam = this.cameras.main;
+    const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+    cam.setZoom(z);
+    cam.scrollX = wx - (sx - cam.width / 2) / z - cam.width / 2;
+    cam.scrollY = wy - (sy - cam.height / 2) / z - cam.height / 2;
+    this.clampCamera();
+  }
+
+  private clampCamera() {
+    const cam = this.cameras.main;
+    const z = cam.zoom;
+    const mx = Math.max(0, WORLD_W / 2 - WORLD_W / (2 * z));
+    const my = Math.max(0, WORLD_H / 2 - WORLD_H / (2 * z));
+    cam.scrollX = Math.max(-mx, Math.min(mx, cam.scrollX));
+    cam.scrollY = Math.max(-my, Math.min(my, cam.scrollY));
+    this.zoomBtn?.classList.toggle("hidden", z < 1.02);
+  }
+
+  /** 1 個世界單位在螢幕上是幾個 CSS 像素 */
+  private cssPerWorld() {
+    const rect = this.game.canvas.getBoundingClientRect();
+    return (rect.width / this.scale.width) * this.cameras.main.zoom;
+  }
+
+  /** 點擊範圍：物件本身大小（世界座標）和手指最小可點範圍（螢幕像素）取大的；放大後就能點得很準 */
+  private touchR(objR: number, minCss: number) {
+    return Math.max(objR, minCss / Math.max(0.05, this.cssPerWorld()));
+  }
+
+  private touches() {
+    return [this.input.pointer1, this.input.pointer2].filter((pt): pt is Phaser.Input.Pointer => !!pt && pt.isDown);
+  }
+
+  private updatePinch() {
+    const [a, b] = this.touches();
+    if (!a || !b) return;
+    const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    if (!this.pinch) {
+      const w = this.toWorld(mx, my);
+      this.pinch = { dist, zoom: this.cameras.main.zoom, wx: w.x, wy: w.y };
+      return;
+    }
+    // 兩指距離決定縮放、兩指中點決定位置（手指下的地圖跟著手指走）
+    this.setView(this.pinch.zoom * (dist / this.pinch.dist), this.pinch.wx, this.pinch.wy, mx, my);
+  }
+
+  // ================================================================ 點擊／拖曳
   // - 點自己的據點 = 選這個據點（右邊面板買兵、選數量）；從據點拖出去 = 派兵，放開的地方是目的地
   // - 點自己的部隊 = 選整隊；拖曳部隊 = 改目的地；選著部隊時點地圖 = 直接派去那裡
-  // - 拖曳途中經過的據點會變成必經點
-  private hitNode(wx: number, wy: number) {
-    let best = -1;
-    let bestD = Infinity;
+  // - 拖曳途中經過的據點會變成必經點；拖空地 = 移動畫面
+  // 部隊、據點、工事位重疊時，看點的位置離誰的中心比較近（用各自的點擊範圍換算）
+
+  private nodeR(i: number) {
+    const nd = this.map.nodes[i];
+    return (nd.kind === "hq" ? 50 : nd.big ? 44 : 34) * (M() ? 1.15 : 1);
+  }
+
+  /** core = 只算據點本身的大小（選著部隊點地圖時用，避免點路上卻被當成點據點） */
+  private hitNode(wx: number, wy: number, core = false): { index: number; score: number } | null {
+    let best: { index: number; score: number } | null = null;
     this.map.nodes.forEach((nd, i) => {
-      const r = (nd.kind === "hq" ? 62 : 44) * (M() ? 1.25 : 1);
-      const d = Math.hypot(wx - nd.x, wy - nd.y);
-      if (d <= r && d < bestD) {
-        bestD = d;
-        best = i;
-      }
+      const r = core ? this.nodeR(i) : this.touchR(this.nodeR(i), M() ? 22 : 12);
+      const score = Math.hypot(wx - nd.x, wy - nd.y) / r;
+      if (score <= 1 && (!best || score < best.score)) best = { index: i, score };
     });
     return best;
   }
 
-  private hitOwnUnit(wx: number, wy: number): UnitState | undefined {
+  /** strict = 已經選著別的部隊時，旁邊的兵要點得很準才算 */
+  private hitOwnUnit(wx: number, wy: number, strict: boolean): { unit: UnitState; score: number } | null {
     const s = session.state!;
-    let best: UnitState | undefined;
-    let bestD = (M() ? 30 : 20) * (this.unitScale / UNIT_SCALE_DESKTOP);
+    const ratio = this.unitScale / UNIT_SCALE_DESKTOP;
+    let best: { unit: UnitState; score: number } | null = null;
     this.units.forEach((v, id) => {
       const u = s.units.get(id);
       if (!u || u.owner !== session.myId || u.inNode >= 0 || u.landT > s.time) return;
-      const d = Math.hypot(wx - v.wx, wy - v.wy);
-      if (d < bestD) {
-        bestD = d;
-        best = u;
-      }
+      const objR = (u.type === "tank" ? 20 : 15) * ratio;
+      const selected = session.selectedUnits.includes(id);
+      const r = this.touchR(objR, M() ? 18 : 10) * (strict && !selected ? 0.55 : 1);
+      const score = Math.hypot(wx - v.wx, wy - v.wy) / r;
+      if (score <= 1 && (!best || score < best.score)) best = { unit: u, score };
+    });
+    return best;
+  }
+
+  private hitSlot(wx: number, wy: number): { index: number; score: number } | null {
+    let best: { index: number; score: number } | null = null;
+    this.slots.forEach((sl, i) => {
+      if (!sl.img.visible) return;
+      const r = this.touchR(18 * (M() ? 1.5 : 1), M() ? 18 : 10);
+      const score = Math.hypot(wx - sl.wx, wy - sl.wy) / r;
+      if (score <= 1 && (!best || score < best.score)) best = { index: i, score };
     });
     return best;
   }
@@ -1395,18 +1498,32 @@ export class BattleScene extends Phaser.Scene {
     play("click", 0.6);
   }
 
-  private destAt(wx: number, wy: number): Dest | null {
-    const node = this.hitNode(wx, wy);
-    if (node >= 0) return { node };
+  /** 世界座標上的目的地：據點或路上的位置 */
+  private destAt(wx: number, wy: number, core = false): Dest | null {
+    const node = this.hitNode(wx, wy, core);
+    if (node) return { node: node.index };
     const hit = nearestLanePos(this.map, wx, wy);
-    if (hit.dist > (M() ? 110 : 70)) return null;
+    if (hit.dist > this.touchR(30, M() ? 26 : 16)) return null;
     return { lane: hit.lane, x: hit.x };
   }
 
   private onPointerDown(p: Phaser.Input.Pointer) {
-    if (!this.map || session.state?.phase !== "playing") return;
-    const me = session.me();
-    if (!me?.alive) return;
+    if (!this.map) return;
+    // 第二根手指放下：開始雙指縮放，取消正在進行的拖曳
+    if (this.touches().length >= 2) {
+      this.endDrag();
+      this.gesture = true;
+      this.pinch = null;
+      this.updatePinch();
+      return;
+    }
+    const w = this.toWorld(p.x, p.y);
+    const base = { node: -1, units: [] as string[], slot: -1, startX: p.x, startY: p.y, lastX: p.x, lastY: p.y, active: false, via: [] as number[], dest: null };
+    const playing = session.state?.phase === "playing" && !!session.me()?.alive;
+    if (!playing) {
+      this.drag = { kind: "pan", ...base };
+      return;
+    }
     if (p.rightButtonDown()) {
       session.airMode = null;
       bus.emit("airMode", null);
@@ -1415,8 +1532,8 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
     if (session.airMode) {
-      const hit = nearestLanePos(this.map, p.worldX, p.worldY);
-      if (hit.dist > (M() ? 150 : 90)) {
+      const hit = nearestLanePos(this.map, w.x, w.y);
+      if (hit.dist > this.touchR(60, M() ? 40 : 24)) {
         bus.emit("toast", "請點在道路上");
         return;
       }
@@ -1427,42 +1544,39 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
     bus.emit("buildMenu", null);
-    // 自己的部隊（優先，才能點到守在據點門口的兵）
-    const unit = this.hitOwnUnit(p.worldX, p.worldY);
-    if (unit) {
-      if (!session.selectedUnits.includes(unit.id)) this.selectGroup(unit);
-      this.drag = { kind: "order", node: -1, units: [...session.selectedUnits], startX: p.x, startY: p.y, active: false, via: [], dest: null };
-      return;
-    }
-    // 自己的據點：準備拖曳派兵
-    const node = this.hitNode(p.worldX, p.worldY);
-    if (node >= 0 && session.ownsNode(node)) {
-      this.drag = { kind: "dispatch", node, units: [], startX: p.x, startY: p.y, active: false, via: [], dest: null };
-      return;
-    }
-    // 空的工事位
-    const rect = this.game.canvas.getBoundingClientRect();
-    const sx = rect.left + (p.x / this.scale.width) * rect.width;
-    const sy = rect.top + (p.y / this.scale.height) * rect.height;
-    for (const sl of this.slots) {
-      if (!sl.img.visible) continue;
-      if (Math.hypot(p.worldX - sl.wx, p.worldY - sl.wy) < (M() ? 44 : 24)) {
-        bus.emit("buildMenu", { lane: sl.lane, node: sl.node, slot: sl.slot, x: sx, y: sy });
-        return;
-      }
-    }
-    // 選著部隊時點地圖：派去那裡
-    if (session.selectedUnits.length) {
-      const dest = this.destAt(p.worldX, p.worldY);
-      if (dest) this.sendOrder(session.selectedUnits, [], dest);
-      else this.clearUnitSelection();
+    const hasSel = session.selectedUnits.length > 0;
+    const unit = this.hitOwnUnit(w.x, w.y, hasSel);
+    const node = this.hitNode(w.x, w.y, hasSel);
+    const ownNode = node && session.ownsNode(node.index) ? node : null;
+    const slot = hasSel ? null : this.hitSlot(w.x, w.y);
+    // 重疊時選最靠近中心的那個
+    const cands: { kind: Drag["kind"]; score: number }[] = [];
+    if (unit) cands.push({ kind: "order", score: unit.score });
+    if (ownNode) cands.push({ kind: "dispatch", score: ownNode.score });
+    if (slot) cands.push({ kind: "slot", score: slot.score * 1.1 });
+    cands.sort((a, b) => a.score - b.score);
+    const pick = cands[0]?.kind ?? "pan";
+    if (pick === "order" && unit) {
+      if (!session.selectedUnits.includes(unit.unit.id)) this.selectGroup(unit.unit);
+      this.drag = { ...base, kind: "order", units: [...session.selectedUnits] };
+    } else if (pick === "dispatch" && ownNode) {
+      this.drag = { ...base, kind: "dispatch", node: ownNode.index };
+    } else if (pick === "slot" && slot) {
+      this.drag = { ...base, kind: "slot", slot: slot.index };
+    } else {
+      this.drag = { ...base, kind: "pan" };
     }
   }
 
   private onPointerMove(p: Phaser.Input.Pointer) {
     if (!this.map) return;
+    if (this.gesture) {
+      this.updatePinch();
+      return;
+    }
+    const w = this.toWorld(p.x, p.y);
     if (session.airMode) {
-      const hit = nearestLanePos(this.map, p.worldX, p.worldY);
+      const hit = nearestLanePos(this.map, w.x, w.y);
       const pos = lanePoint(this.map.lanes[hit.lane], hit.x);
       this.crosshair.setVisible(true).setPosition(pos.x, pos.y).setScale(session.airMode === "bomber" ? 1.2 : 0.9).setRotation(this.clock);
       return;
@@ -1471,32 +1585,66 @@ export class BattleScene extends Phaser.Scene {
     const d = this.drag;
     if (!d || !p.isDown) return;
     if (!d.active) {
-      if (Math.hypot(p.x - d.startX, p.y - d.startY) < (M() ? 18 : 12)) return;
+      const rect = this.game.canvas.getBoundingClientRect();
+      const cssPerPx = rect.width / this.scale.width;
+      if (Math.hypot(p.x - d.startX, p.y - d.startY) * cssPerPx < (M() ? 10 : 6)) return;
       d.active = true;
       bus.emit("buildMenu", null);
     }
+    if (d.kind === "pan" || d.kind === "slot") {
+      const cam = this.cameras.main;
+      cam.scrollX -= (p.x - d.lastX) / cam.zoom;
+      cam.scrollY -= (p.y - d.lastY) / cam.zoom;
+      this.clampCamera();
+      d.lastX = p.x;
+      d.lastY = p.y;
+      return;
+    }
     // 經過的據點變成必經點（出發點和最後一個必經點不重複加）
-    const over = this.hitNode(p.worldX, p.worldY);
-    if (over >= 0 && over !== d.node && d.via[d.via.length - 1] !== over) d.via.push(over);
-    d.dest = this.destAt(p.worldX, p.worldY);
-    this.drawPreview(p.worldX, p.worldY);
+    const over = this.hitNode(w.x, w.y, true);
+    if (over && over.index !== d.node && d.via[d.via.length - 1] !== over.index) d.via.push(over.index);
+    d.dest = this.destAt(w.x, w.y);
+    this.drawPreview(w.x, w.y);
   }
 
   private onPointerUp(p: Phaser.Input.Pointer) {
+    if (this.gesture) {
+      // 雙指手勢：全部手指都放開才結束，期間不算點擊
+      this.pinch = null;
+      if (this.touches().length === 0) this.gesture = false;
+      this.drag = null;
+      return;
+    }
     const d = this.drag;
     this.drag = null;
     this.preview.clear();
     this.previewText.setVisible(false);
-    if (!d || !this.map || session.state?.phase !== "playing") return;
+    if (!d || !this.map || session.state?.phase !== "playing" || !session.me()?.alive) return;
+    const w = this.toWorld(p.x, p.y);
     if (!d.active) {
       // 只是點一下
       if (d.kind === "dispatch") {
         if (session.selectedUnits.length) this.sendOrder(session.selectedUnits, [], { node: d.node });
         else this.selectNode(d.node);
+      } else if (d.kind === "slot") {
+        const sl = this.slots[d.slot];
+        if (!sl) return;
+        const rect = this.game.canvas.getBoundingClientRect();
+        bus.emit("buildMenu", {
+          lane: sl.lane, node: sl.node, slot: sl.slot,
+          x: rect.left + (p.x / this.scale.width) * rect.width,
+          y: rect.top + (p.y / this.scale.height) * rect.height,
+        });
+      } else if (d.kind === "pan" && session.selectedUnits.length) {
+        // 選著部隊點地圖：據點要點在據點本身上，不然就是路上的那個位置
+        const dest = this.destAt(w.x, w.y, true);
+        if (dest) this.sendOrder(session.selectedUnits, [], dest);
+        else this.clearUnitSelection();
       }
       return;
     }
-    const dest = d.dest ?? this.destAt(p.worldX, p.worldY);
+    if (d.kind === "pan" || d.kind === "slot") return;
+    const dest = d.dest ?? this.destAt(w.x, w.y);
     if (!dest) {
       bus.emit("toast", "放在道路或據點上才能派兵");
       return;

@@ -13,6 +13,7 @@ import {
   nodeDistance,
   nodeEnd,
   nodeDir,
+  upkeepFor,
   type AirKind,
   type BuildKind,
   type UnitType,
@@ -194,7 +195,8 @@ export class BotBrain {
       const pop = battle.garrisonAt(node);
       if (pop === 0) continue;
       const need = node === p.hq ? 7 : 5;
-      const ready = pop >= need + Math.min(6, Math.floor(s.time / 90)) || p.upkeep >= 2.2 || (s.time < 50 && pop >= 3);
+      const hoarding = upkeepFor(battle.garrisonPopOf(p.id)) >= 2.2;
+      const ready = pop >= need + Math.min(6, Math.floor(s.time / 90)) || hoarding || (s.time < 50 && pop >= 3);
       if (!ready) continue;
       // 大本營留一點兵防守
       const keep = node === p.hq && s.time > 120 ? 2 : 0;

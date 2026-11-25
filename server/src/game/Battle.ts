@@ -483,7 +483,8 @@ export class Battle {
         return;
       }
       const income = BASE_INCOME + (bonus.get(p.id) ?? 0) + p.logistics * LOGISTICS_INCOME_PER_LEVEL;
-      const upkeep = upkeepFor(this.tally.garrisonPop.get(p.id) ?? 0);
+      const garrison = this.tally.garrisonPop.get(p.id) ?? 0;
+      const upkeep = upkeepFor(garrison, (this.tally.pop.get(p.id) ?? 0) - garrison);
       p.fundsExact = Math.max(0, p.fundsExact + (income - upkeep) * dt);
       p.funds = Math.floor(p.fundsExact);
       const shown = Math.round(income * 10) / 10;
@@ -518,6 +519,11 @@ export class Battle {
   /** 某個據點裡的駐軍人口 */
   garrisonAt(node: number) {
     return this.tally.garrison[node] ?? 0;
+  }
+
+  /** 某玩家所有據點裡的駐軍人口 */
+  garrisonPopOf(playerId: string) {
+    return this.tally.garrisonPop.get(playerId) ?? 0;
   }
 
   private countForts() {
@@ -568,9 +574,14 @@ export class Battle {
       } else if (def.repair) {
         if (this.engineerAct(u, def, units, structures, dt)) return;
       } else {
-        const target = this.findTarget(u, units, structures, def.range);
+        const target = this.findTarget(u, units, structures, def.range, false, def.minRange ?? 0);
         if (target) {
           this.fireAt(u, def, target, units, structures);
+          return;
+        }
+        // 砲兵：敵人貼太近打不到，也不要再往前走
+        if (def.minRange && this.findTarget(u, units, structures, def.minRange)) {
+          if (u.attacking) u.attacking = false;
           return;
         }
       }
@@ -781,13 +792,14 @@ export class Battle {
     this.nextRelease.delete(node);
   }
 
-  private findTarget(u: Unit, units: Unit[], structures: Structure[], range: number, buildingsOnly = false): Target | null {
+  private findTarget(u: Unit, units: Unit[], structures: Structure[], range: number, buildingsOnly = false, minRange = 0): Target | null {
     let best: Target | null = null;
     let bestD = range;
     const now = this.state.time;
     for (const e of buildingsOnly ? [] : units) {
       if (e.owner === u.owner || e.hp <= 0 || e.landT > now || e.inNode >= 0) continue;
       const d = roadDistance(this.map, u.lane, u.x, e.lane, e.x);
+      if (d < minRange) continue;
       if (d <= bestD) {
         bestD = d;
         best = { kind: "unit", obj: e, lane: e.lane, x: e.x };
@@ -796,6 +808,7 @@ export class Battle {
     for (const st of structures) {
       if (st.owner === u.owner || st.hp <= 0) continue;
       const d = roadDistance(this.map, u.lane, u.x, st.lane, st.x);
+      if (d < minRange) continue;
       if (d <= bestD) {
         bestD = d;
         best = { kind: "struct", obj: st, lane: st.lane, x: st.x };
@@ -807,6 +820,7 @@ export class Battle {
       if (!n.owner || n.owner === u.owner || n.hp <= 0) continue;
       const x = nodeEnd(geom, ni);
       const d = Math.abs(u.x - x);
+      if (d < minRange) continue;
       if (d <= bestD) {
         bestD = d;
         best = { kind: "node", obj: n, index: ni, lane: u.lane, x };

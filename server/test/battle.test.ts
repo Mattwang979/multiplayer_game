@@ -116,6 +116,8 @@ test("剋制關係：戰車打贏四個步兵班", () => assert.equal(duel(["tan
 test("剋制關係：兩個步兵班打贏一門反戰車砲", () => assert.equal(duel(["rifle", 2], ["at", 1]), "a"));
 test("剋制關係：機槍組打贏一個步兵班", () => assert.equal(duel(["mg", 1], ["rifle", 1]), "a"));
 test("砲兵被削弱：三個步兵班打贏一門砲兵", () => assert.equal(duel(["rifle", 3], ["artillery", 1]), "a"));
+test("剋砲兵：一輛戰車打贏兩門砲兵", () => assert.equal(duel(["tank", 1], ["artillery", 2]), "a"));
+test("剋砲兵：機槍組打贏一門砲兵", () => assert.equal(duel(["mg", 1], ["artillery", 1]), "a"));
 
 test("開局：每人一座大本營加兩座堡壘，大本營裡有 3 個步兵班", () => {
   const { battle, state } = setup(2, "pass");
@@ -220,10 +222,11 @@ test("養兵費：據點裡囤越多兵，扣越多錢", () => {
   run(battle, 10);
   assert.ok(p0.upkeep > 3, `養兵費應該很高（${p0.upkeep}）`);
   assert.ok(p0.fundsExact < p1.fundsExact - 30);
-  // 派出去的兵不用養兵費
+  // 派出去的兵也要養，但比囤在據點裡便宜很多
+  const hoarded = p0.upkeep;
   battle.dispatch("p0", 0, [], [], { node: 7 }, true);
-  run(battle, 12);
-  assert.ok(p0.upkeep < 0.5);
+  run(battle, 15);
+  assert.ok(p0.upkeep > 0.5 && p0.upkeep < hoarded / 2, `野外養兵費 ${p0.upkeep} vs 囤兵 ${hoarded}`);
 });
 
 test("剛佔下的堡壘 15 秒內不產錢", () => {

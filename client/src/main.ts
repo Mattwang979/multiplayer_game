@@ -36,7 +36,7 @@ function ensureGame() {
 // ---------------------------------------------------------------- 房間
 
 const CONSENTED = 4000; // Colyseus：正常、自願離開
-const SERVER_EVENTS = ["bomb", "paradrop", "airDown", "airIncoming", "eliminated", "hqAlert", "captured", "fortFallen", "ended", "notice"];
+const SERVER_EVENTS = ["bomb", "paradrop", "airDown", "airIncoming", "eliminated", "hqAlert", "captured", "fortFallen", "leader", "ended", "notice"];
 
 function attach(room: GameRoom) {
   session.room = room;
@@ -190,6 +190,9 @@ async function boot() {
   bindLobbyActions();
   showScreen("home");
   // 每次觸控都確認音訊是開著的（iOS 接電話、切 App 回來後會被暫停）
+  // iOS Safari：雙指縮放要給戰場用，不要縮放整個網頁
+  document.addEventListener("gesturestart", (e) => e.preventDefault());
+  document.addEventListener("gesturechange", (e) => e.preventDefault());
   document.addEventListener("pointerdown", () => initAudio(), { passive: true });
   document.addEventListener("touchend", () => initAudio(), { passive: true });
   const room = await tryReconnect();
