@@ -1,10 +1,21 @@
 // 規則測試：直接跑模擬，不經過網路。執行：npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MAPS, TICK_RATE, UNIT_TYPES, type UnitType } from "@frontline/shared";
+import {
+  CAPTURE_GRACE,
+  FORT_BREAK_BOUNTY,
+  LEADER_FORT_BOUNTY_MULT,
+  MAPS,
+  RELEASE_INTERVAL,
+  TICK_RATE,
+  UNIT_TYPES,
+  nodeDir,
+  nodeEnd,
+  type UnitType,
+} from "@frontline/shared";
 import { Battle } from "../src/game/Battle";
 import { BotBrain } from "../src/game/Bot";
-import { BattleState, Player } from "../src/game/schema";
+import { BattleState, Player, type Unit } from "../src/game/schema";
 
 const DT = 1 / TICK_RATE;
 
@@ -16,6 +27,7 @@ function seeded(seed: number) {
   };
 }
 
+// 山口突破：0 = 綠方大本營、1 = 灰方大本營，2/3 綠方堡壘、4/5 灰方堡壘，6 北山口、7 谷地要塞、8 南山口（無主）
 function setup(n: number, map = "pass", seed = 1) {
   const state = new BattleState();
   state.mapChoice = map;
@@ -44,32 +56,47 @@ function run(battle: Battle, seconds: number, until?: () => boolean) {
   return false;
 }
 
-/** 不管冷卻和錢，直接出兵 */
-function force(battle: Battle, id: string, type: UnitType, lane: number, node: number, count = 1) {
-  const p = battle.state.players.get(id)!;
-  for (let i = 0; i < count; i++) {
-    p.fundsExact = 100000;
-    for (let k = 0; k < UNIT_TYPES.length; k++) p.deployReady[k] = 0;
-    assert.equal(battle.spawn(id, type, lane, node), null);
-  }
+const units = (battle: Battle, pred: (u: Unit) => boolean = () => true) => [...battle.state.units.values()].filter(pred);
+const counts = (type: UnitType, n: number) => UNIT_TYPES.map((t) => (t === type ? n : 0));
+
+/** 不管錢，直接在據點買兵 */
+function give(battle: Battle, id: string, type: UnitType, node: number, count = 1) {
+  battle.state.players.get(id)!.fundsExact = 100000;
+  for (let left = count; left > 0; left -= 10) assert.equal(battle.buy(id, node, type, Math.min(10, left)), null);
 }
 
-/** 山口地圖的中央谷地道路上，兩邊從路的兩端對衝（只看部隊對打） */
+/** 直接把兵放到路上（測試對打用） */
+function place(battle: Battle, id: string, type: UnitType, lane: number, x: number, dir: 1 | -1, destNode: number, count = 1) {
+  const p = battle.state.players.get(id)!;
+  const made: Unit[] = [];
+  for (let i = 0; i < count; i++) {
+    give(battle, id, type, p.hq, 1);
+    const u = units(battle, (u) => u.owner === id && u.inNode === p.hq).pop()!;
+    u.inNode = -1;
+    u.lane = lane;
+    u.x = x - dir * i * 6;
+    u.dir = dir;
+    u.mode = "move";
+    u.destNode = destNode;
+    u.enter = false;
+    u.route.clear();
+    made.push(u);
+  }
+  return made;
+}
+
+/** 谷地道路上兩邊對衝（先把兩端都變成無主，只看部隊對打） */
 function duel(a: [UnitType, number], b: [UnitType, number]) {
   const { battle, state } = setup(2, "pass");
   const lane = laneBetween(battle, 0, 7);
-  const len = battle.map.lanes[lane].len;
-  force(battle, "p0", a[0], lane, 0, a[1]);
-  force(battle, "p1", b[0], laneBetween(battle, 7, 1), 1, b[1]);
-  state.units.forEach((u) => {
-    if (u.owner === "p0") {
-      u.x = 160;
-    } else {
-      u.lane = lane;
-      u.dir = -1;
-      u.x = len - 120;
-    }
-  });
+  const geom = battle.map.lanes[lane];
+  state.units.forEach((u) => state.units.delete(u.id));
+  const from0 = nodeEnd(geom, 0);
+  const d0 = nodeDir(geom, 0);
+  place(battle, "p0", a[0], lane, from0 + d0 * 160, d0, 7, a[1]);
+  place(battle, "p1", b[0], lane, from0 + d0 * (geom.len - 120), d0 === 1 ? -1 : 1, 0, b[1]);
+  state.nodes[0].owner = "";
+  state.nodes[0].hp = 0;
   let result = "timeout";
   run(battle, 150, () => {
     let s0 = 0;
@@ -88,41 +115,216 @@ test("剋制關係：兩門反戰車砲打贏一輛戰車", () => assert.equal(d
 test("剋制關係：戰車打贏四個步兵班", () => assert.equal(duel(["tank", 1], ["rifle", 4]), "a"));
 test("剋制關係：兩個步兵班打贏一門反戰車砲", () => assert.equal(duel(["rifle", 2], ["at", 1]), "a"));
 test("剋制關係：機槍組打贏一個步兵班", () => assert.equal(duel(["mg", 1], ["rifle", 1]), "a"));
+test("砲兵被削弱：三個步兵班打贏一門砲兵", () => assert.equal(duel(["rifle", 3], ["artillery", 1]), "a"));
 
-test("開局：每人一座大本營加兩座堡壘，其他是無主", () => {
-  const { state } = setup(2, "pass");
+test("開局：每人一座大本營加兩座堡壘，大本營裡有 3 個步兵班", () => {
+  const { battle, state } = setup(2, "pass");
   const owned = (id: string) => [...state.nodes.values()].filter((n) => n.owner === id && n.hp > 0).length;
   assert.equal(owned("p0"), 3);
   assert.equal(owned("p1"), 3);
   assert.equal([...state.nodes.values()].filter((n) => !n.owner).length, 3);
+  assert.equal(battle.garrisonUnits("p0", 0).length, 3);
 });
 
-test("只能從自己的據點出兵", () => {
+test("買兵：只能在自己的據點買，據點住滿就不能再買", () => {
+  const { battle, state } = setup(2, "pass");
+  state.players.get("p0")!.fundsExact = 100000;
+  assert.equal(battle.buy("p0", 4, "rifle", 1), "只能在自己的據點買兵");
+  // 小堡壘最多 12 人口：4 輛戰車 = 12
+  assert.equal(battle.buy("p0", 2, "tank", 4), null);
+  assert.equal(battle.buy("p0", 2, "rifle", 1), "這座據點住滿了，先把兵派出去");
+  state.players.get("p0")!.fundsExact = 10;
+  assert.equal(battle.buy("p0", 0, "rifle", 1), "軍費不足");
+});
+
+test("派兵：選兵種和數量，一次派出時每支部隊間隔出門", () => {
+  const { battle, state } = setup(2, "pass");
+  give(battle, "p0", "tank", 0, 2);
+  assert.equal(battle.dispatch("p0", 0, counts("rifle", 2), [], { node: 7 }, true), null);
+  const leaving = units(battle, (u) => u.owner === "p0" && u.departAt > 0);
+  assert.equal(leaving.length, 2, "只派出選的 2 個步兵班");
+  assert.ok(Math.abs(leaving[1].departAt - leaving[0].departAt - RELEASE_INTERVAL) < 1e-6);
+  run(battle, 0.2);
+  assert.equal(units(battle, (u) => u.owner === "p0" && u.inNode < 0).length, 1, "第二支還沒出門");
+  run(battle, 1);
+  assert.equal(units(battle, (u) => u.owner === "p0" && u.inNode < 0).length, 2);
+  assert.equal(battle.garrisonUnits("p0", 0).length, 3, "戰車和剩下的步兵還在大本營");
+  // 全部是 0 = 全部派出
+  assert.equal(battle.dispatch("p0", 0, [], [], { node: 7 }, true), null);
+  assert.equal(battle.garrisonUnits("p0", 0).length, 0);
+});
+
+test("派兵到無主堡壘：打下來後進駐", () => {
+  const { battle, state, events } = setup(2, "pass");
+  // 從大本營經過西北堡（2 號）去北山口（6 號）
+  assert.equal(battle.dispatch("p0", 0, [], [2], { node: 6 }, true), null);
+  const ok = run(battle, 90, () => battle.garrisonUnits("p0", 6).length === 3);
+  assert.ok(events.some((e) => e.type === "captured" && e.payload.node === 6), "北山口應該被佔領");
+  assert.ok(ok, "佔領後應該進駐");
+  assert.equal(state.nodes[6].owner, "p0");
+});
+
+test("派兵到路上：走到那個位置駐守", () => {
   const { battle } = setup(2, "pass");
-  assert.equal(battle.spawn("p0", "rifle", laneBetween(battle, 4, 1), 1), "只能從自己的據點出兵");
-  assert.equal(battle.spawn("p0", "rifle", laneBetween(battle, 0, 2), 0), null);
+  const lane = laneBetween(battle, 0, 7);
+  const x = nodeEnd(battle.map.lanes[lane], 0) + nodeDir(battle.map.lanes[lane], 0) * 200;
+  assert.equal(battle.dispatch("p0", 0, [], [], { lane, x }, true), null);
+  run(battle, 20);
+  const out = units(battle, (u) => u.owner === "p0");
+  assert.ok(out.every((u) => u.inNode < 0 && u.mode === "hold" && u.lane === lane && Math.abs(u.x - x) < 1));
 });
 
-test("部隊走到自己的據點會繼續往無主堡壘推進，並佔領它", () => {
-  const { battle, state, events } = setup(2, "pass");
-  force(battle, "p0", "rifle", laneBetween(battle, 0, 2), 0, 2);
-  const ok = run(battle, 60, () => state.nodes[6].owner === "p0");
-  assert.ok(ok, "北山口應該被佔領");
-  assert.ok(events.some((e) => e.type === "captured" && e.payload.node === 6));
-  assert.equal(state.nodes[6].hp, state.nodes[6].maxHp * 0.5);
+test("調度與撤退：改目的地、撤回後方據點並進駐", () => {
+  const { battle, state } = setup(2, "pass");
+  const lane = laneBetween(battle, 0, 7);
+  const geom = battle.map.lanes[lane];
+  const x = nodeEnd(geom, 0) + nodeDir(geom, 0) * 300;
+  battle.dispatch("p0", 0, [], [], { lane, x }, true);
+  run(battle, 15);
+  const ids = units(battle, (u) => u.owner === "p0").map((u) => u.id);
+  // 改去谷地要塞
+  assert.equal(battle.order("p0", ids, [], { node: 7 }, false), null);
+  assert.ok(units(battle, (u) => u.owner === "p0").every((u) => u.destNode === 7 && u.mode === "move"));
+  run(battle, 3);
+  // 撤退：回到最近的自己據點
+  state.units.forEach((u) => (u.hp = u.maxHp * 0.4));
+  assert.equal(battle.retreat("p0", ids), null);
+  assert.ok(units(battle, (u) => u.owner === "p0").every((u) => u.mode === "retreat"));
+  run(battle, 30, () => battle.garrisonUnits("p0", 0).length === 3);
+  assert.equal(battle.garrisonUnits("p0", 0).length, 3, "應該回到大本營");
+  // 駐紮會回血
+  run(battle, 15);
+  assert.ok(units(battle, (u) => u.owner === "p0").every((u) => u.hp > u.maxHp * 0.95));
 });
 
-test("敵人的堡壘打到 0 血後可以佔領", () => {
+test("撤退中的部隊不會開火", () => {
+  const { battle, state } = setup(2, "pass");
+  const lane = laneBetween(battle, 0, 7);
+  const geom = battle.map.lanes[lane];
+  const a = place(battle, "p0", "rifle", lane, nodeEnd(geom, 0) + nodeDir(geom, 0) * 400, nodeDir(geom, 0), 7, 1)[0];
+  place(battle, "p1", "rifle", lane, nodeEnd(geom, 0) + nodeDir(geom, 0) * 470, nodeDir(geom, 0) === 1 ? -1 : 1, 0, 1);
+  battle.retreat("p0", [a.id]);
+  const shots = a.shots;
+  run(battle, 2);
+  assert.equal(a.shots, shots);
+  assert.equal(state.units.get(a.id)?.mode ?? "retreat", "retreat");
+});
+
+test("養兵費：據點裡囤越多兵，扣越多錢", () => {
+  const { battle, state } = setup(2, "pass");
+  const p0 = state.players.get("p0")!;
+  const p1 = state.players.get("p1")!;
+  give(battle, "p0", "rifle", 0, 20);
+  p0.fundsExact = 1000;
+  p1.fundsExact = 1000;
+  run(battle, 10);
+  assert.ok(p0.upkeep > 3, `養兵費應該很高（${p0.upkeep}）`);
+  assert.ok(p0.fundsExact < p1.fundsExact - 30);
+  // 派出去的兵不用養兵費
+  battle.dispatch("p0", 0, [], [], { node: 7 }, true);
+  run(battle, 12);
+  assert.ok(p0.upkeep < 0.5);
+});
+
+test("剛佔下的堡壘 15 秒內不產錢", () => {
+  const { battle, state } = setup(2, "pass");
+  const p0 = state.players.get("p0")!;
+  run(battle, 1);
+  const before = p0.income;
+  state.nodes[6].hp = 0;
+  place(battle, "p0", "rifle", laneBetween(battle, 2, 6), nodeEnd(battle.map.lanes[laneBetween(battle, 2, 6)], 6), 1, 6, 1);
+  run(battle, 5, () => state.nodes[6].owner === "p0");
+  run(battle, 1);
+  assert.equal(p0.income, before, "整頓期間收入不變");
+  run(battle, CAPTURE_GRACE);
+  assert.ok(p0.income > before);
+});
+
+test("工兵：近身爆破堡壘很快，也會修理自己的據點", () => {
+  const demo = (type: UnitType) => {
+    const { battle, state } = setup(2, "pass");
+    const lane = laneBetween(battle, 7, 1);
+    const geom = battle.map.lanes[lane];
+    state.units.forEach((u) => state.units.delete(u.id));
+    // 只測拆房子：讓大本營打不到人（血量不變、但先把它的冷卻拉長）
+    const hq = state.nodes[1];
+    place(battle, "p0", type, lane, nodeEnd(geom, 1) - nodeDir(geom, 1) * -30, nodeDir(geom, 1) === 1 ? -1 : 1, 1, 2);
+    const start = hq.hp;
+    for (let i = 0; i < 4 / DT; i++) {
+      hq.cooldownLeft = 99;
+      battle.step(DT);
+    }
+    return start - hq.hp;
+  };
+  const eng = demo("engineer");
+  const rifle = demo("rifle");
+  assert.ok(eng > rifle * 5, `工兵 ${eng.toFixed(0)} vs 步兵 ${rifle.toFixed(0)}`);
+
+  const { battle, state } = setup(2, "pass");
+  state.nodes[2].hp = 500;
+  give(battle, "p0", "engineer", 2, 1);
+  run(battle, 10);
+  assert.ok(state.nodes[2].hp > 500, "駐紮在堡壘裡的工兵會修理堡壘");
+});
+
+test("醫療兵：幫附近的步兵回血", () => {
+  const { battle, state } = setup(2, "pass");
+  const lane = laneBetween(battle, 0, 7);
+  const geom = battle.map.lanes[lane];
+  const x = nodeEnd(geom, 0) + nodeDir(geom, 0) * 250;
+  const [r] = place(battle, "p0", "rifle", lane, x, nodeDir(geom, 0), 7, 1);
+  const [m] = place(battle, "p0", "medic", lane, x - nodeDir(geom, 0) * 20, nodeDir(geom, 0), 7, 1);
+  r.mode = m.mode = "hold";
+  r.hp = 30;
+  run(battle, 5);
+  assert.ok(r.hp > 55, `步兵血量 ${r.hp.toFixed(0)}`);
+});
+
+test("堡壘被攻破時，裡面的駐軍會衝出來", () => {
   const { battle, state, events } = setup(2, "pass");
-  // 讓綠方先拿下北山口，再從那裡打灰方的東北堡（4 號）
+  give(battle, "p1", "rifle", 4, 3);
+  state.nodes[4].hp = 0;
+  battle.state.nodes[4].owner = "p1";
+  run(battle, DT);
+  assert.ok(events.some((e) => e.type === "fortFallen" && e.payload.node === 4));
+  const out = units(battle, (u) => u.owner === "p1" && u.type === "rifle" && u.destNode === 4);
+  assert.equal(out.length, 3);
+  assert.ok(out.every((u) => u.inNode < 0));
+});
+
+test("領先者懸賞：堡壘最多的人被懸賞，攻破他的堡壘賞金加倍", () => {
+  const { battle, state, events } = setup(3, "oasis");
+  // 把一座無主堡壘給 p0 → p0 堡壘最多
+  const free = [...state.nodes.values()].findIndex((n) => !n.owner);
+  give(battle, "p0", "rifle", state.players.get("p0")!.hq, 1);
+  state.nodes[free].owner = "p0";
+  state.nodes[free].faction = 0;
+  state.nodes[free].hp = state.nodes[free].maxHp;
+  // 讓 p1 打爆它
+  state.nodes[free].hp = 1;
+  run(battle, DT);
+  assert.equal(state.leaderId, "p0");
+  assert.ok(events.some((e) => e.type === "leader" && e.payload.id === "p0"));
+  const p1 = state.players.get("p1")!;
+  const before = p1.fundsExact;
+  (battle as any).lastHit.set(`n${free}`, "p1");
+  state.nodes[free].hp = 0;
+  run(battle, DT);
+  assert.ok(p1.fundsExact - before >= FORT_BREAK_BOUNTY * LEADER_FORT_BOUNTY_MULT - 1);
+  assert.equal(state.leaderId, "", "大家一樣多就沒有懸賞");
+});
+
+test("戰車＋工兵可以攻破敵人的堡壘並佔領", () => {
+  const { battle, state, events } = setup(2, "pass");
   state.nodes[6].owner = "p0";
   state.nodes[6].faction = 0;
   state.nodes[6].hp = state.nodes[6].maxHp;
-  state.nodes[4].hp = 60;
-  force(battle, "p0", "tank", laneBetween(battle, 6, 4), 6, 2);
-  const ok = run(battle, 60, () => state.nodes[4].owner === "p0");
+  give(battle, "p0", "tank", 6, 2);
+  give(battle, "p0", "engineer", 6, 3);
+  assert.equal(battle.dispatch("p0", 6, [], [], { node: 4 }, true), null);
+  const ok = run(battle, 90, () => state.nodes[4].owner === "p0");
   assert.ok(events.some((e) => e.type === "fortFallen" && e.payload.node === 4), "東北堡應該被攻破");
-  assert.ok(ok, "東北堡應該被綠方佔領");
+  assert.ok(ok, "東北堡應該被佔領");
 });
 
 test("大本營被打爆：出局，他的堡壘全部變成無主", () => {
@@ -133,27 +335,26 @@ test("大本營被打爆：出局，他的堡壘全部變成無主", () => {
   assert.equal(p1.alive, false);
   assert.equal([...state.nodes.values()].filter((n) => n.owner === "p1").length, 0);
   assert.equal(state.nodes[p1.hq].kind, "bigfort");
+  assert.equal(units(battle, (u) => u.owner === "p1").length, 0);
 });
 
 test("轟炸機會飛過去炸傷敵人", () => {
   const { battle, state, events } = setup(2, "pass");
   const lane = laneBetween(battle, 7, 1);
-  force(battle, "p1", "rifle", lane, 1, 3);
+  state.units.forEach((u) => state.units.delete(u.id));
+  const targets = place(battle, "p1", "rifle", lane, 300, 1, 1, 3);
   const p0 = state.players.get("p0")!;
   p0.fundsExact = 1000;
   p0.airReady[0] = 0;
   state.time = 40;
   assert.equal(battle.callAir("p0", "bomber", lane, 300), null);
   for (let i = 0; i < 6 / DT; i++) {
-    state.units.forEach((u) => (u.x = 300));
+    targets.forEach((u) => (u.x = 300));
     battle.step(DT);
   }
   assert.ok(events.some((e) => e.type === "bomb"));
-  let hurt = 0;
-  state.units.forEach((u) => {
-    if (u.hp < u.maxHp) hurt++;
-  });
-  assert.ok(hurt + (3 - state.units.size) >= 2);
+  const hurt = targets.filter((u) => u.hp < u.maxHp || !state.units.has(u.id)).length;
+  assert.ok(hurt >= 2);
 });
 
 test("運輸機會投下空降兵", () => {
@@ -166,7 +367,7 @@ test("運輸機會投下空降兵", () => {
   assert.equal(battle.callAir("p0", "transport", lane, 100), null);
   run(battle, 8);
   assert.ok(events.some((e) => e.type === "paradrop"));
-  assert.equal([...state.units.values()].filter((u) => u.type === "para").length, 2);
+  assert.equal(units(battle, (u) => u.type === "para").length, 2);
 });
 
 test("防空砲會把飛機打下來", () => {
@@ -195,11 +396,15 @@ for (const def of MAPS) {
       const bots: BotBrain[] = [];
       state.players.forEach((p) => bots.push(new BotBrain(p.id, rng)));
       let steps = 0;
+      let maxPop = 0;
       while (state.phase === "playing" && steps < 700 / DT) {
         for (const b of bots) b.update(battle, DT);
         battle.step(DT);
         steps++;
-        if (steps % 200 === 0) state.units.forEach((u) => assert.ok(Number.isFinite(u.x) && Number.isFinite(u.hp)));
+        if (steps % 200 === 0) {
+          state.units.forEach((u) => assert.ok(Number.isFinite(u.x) && Number.isFinite(u.hp)));
+          state.players.forEach((p) => (maxPop = Math.max(maxPop, p.pop)));
+        }
       }
       assert.equal(state.phase, "ended");
       assert.ok(state.winnerId !== "");
@@ -207,7 +412,7 @@ for (const def of MAPS) {
       const falls = events.filter((e) => e.type === "fortFallen").length;
       let deployed = 0;
       state.players.forEach((p) => (deployed += p.deployed));
-      console.log(`  ${def.name} ${n} 人：${state.time.toFixed(0)} 秒，${state.endReason}，出兵 ${deployed}，佔領 ${caps} 次，攻破 ${falls} 次`);
+      console.log(`  ${def.name} ${n} 人：${state.time.toFixed(0)} 秒，${state.endReason}，買兵 ${deployed}，最高人口 ${maxPop}，佔領 ${caps} 次，攻破 ${falls} 次`);
       assert.ok(caps >= 2, "應該有據點被佔領");
     });
   }

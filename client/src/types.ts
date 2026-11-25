@@ -22,13 +22,13 @@ export interface PlayerState {
   rank: number;
   funds: number;
   income: number;
+  upkeep: number;
+  pop: number;
   forts: number;
   firepower: number;
   armor: number;
   logistics: number;
-  deployReady: ArrayLike<number>;
   airReady: ArrayLike<number>;
-  unitCount: number;
   kills: number;
   captures: number;
   deployed: number;
@@ -44,6 +44,7 @@ export interface NodeState {
   capturer: string;
   capFaction: number;
   progress: number;
+  incomeAt: number;
   shots: number;
   tl: number;
   tx: number;
@@ -68,6 +69,14 @@ export interface UnitState {
   tl: number;
   tx: number;
   landT: number;
+  inNode: number; // 駐紮在哪個據點（-1 = 野外）
+  group: string;
+  mode: string; // move / hold / retreat
+  enter: boolean;
+  destNode: number;
+  destLane: number;
+  destX: number;
+  route: ArrayLike<number>;
 }
 
 export interface StructureState {
@@ -119,4 +128,5 @@ export interface GameState {
   structures: MapLike<StructureState>;
   aircraft: MapLike<AircraftState>;
   fronts: ArrayLike<number>;
+  leaderId: string;
 }

@@ -1,7 +1,7 @@
 // 前端進入點：首頁 → 大廳 → 對局，三個畫面依照房間狀態切換。
 import "./style.css";
 import Phaser from "phaser";
-import { WORLD_H, WORLD_W } from "@frontline/shared";
+import { KICK_CODE, WORLD_H, WORLD_W } from "@frontline/shared";
 import { canFullscreen, enterFullscreen, isMobile, updateDeviceClass } from "./device";
 import { BattleScene } from "./game/BattleScene";
 import { initAudio, play, startMusic, stopMusic } from "./game/sound";
@@ -35,6 +35,7 @@ function ensureGame() {
 
 // ---------------------------------------------------------------- 房間
 
+const CONSENTED = 4000; // Colyseus：正常、自願離開
 const SERVER_EVENTS = ["bomb", "paradrop", "airDown", "airIncoming", "eliminated", "hqAlert", "captured", "fortFallen", "ended", "notice"];
 
 function attach(room: GameRoom) {
@@ -44,12 +45,14 @@ function attach(room: GameRoom) {
   for (const ev of SERVER_EVENTS) room.onMessage(ev, (m: unknown) => bus.emit(ev, m));
   room.onStateChange(() => onState());
   room.onLeave((code: number) => {
+    // 自己按離開或已經換到別的房間：舊房間的離開事件不要影響現在的畫面
+    if (session.room !== room) return;
     session.room = null;
     forgetRoom();
     lastPhase = "";
     showScreen("home");
-    if (code > 1000 && code !== 4000) homeError("跟伺服器的連線中斷了");
-    if (code === 4000) homeError("房主請你離開房間");
+    if (code === KICK_CODE) homeError("房主請你離開房間");
+    else if (code !== 1000 && code !== CONSENTED) homeError("跟伺服器的連線中斷了");
   });
   room.onDrop(() => bus.emit("toast", "連線不穩，重新連線中…"));
   room.onReconnect(() => bus.emit("toast", "已重新連線"));
@@ -198,3 +201,4 @@ void boot();
 
 // 讓瀏覽器測試腳本可以讀到狀態
 (window as unknown as { __frontline: typeof session }).__frontline = session;
+Object.defineProperty(window, "__game", { get: () => game });

@@ -108,10 +108,6 @@ button { font-family: inherit; }
 .pc-row { display: flex; align-items: center; gap: 6px; }
 .pc-row .bar { flex: 1; min-width: 0; }
 .pc-forts { flex: none; font-size: 11px; font-weight: 900; line-height: 1; color: var(--text); white-space: nowrap; }
-.route-btn span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.route-tip { display: none; }
-body.mobile .route-btn { flex-direction: column; align-items: flex-start; gap: 4px; }
-body.mobile .route-tip { display: block; font-style: normal; font-size: 11px; font-weight: 500; color: var(--muted); }
 .lobby-foot { display: flex; justify-content: space-between; gap: 12px; }
 
 /* ---------- 對局畫面 ---------- */
@@ -154,14 +150,6 @@ body.mobile .route-tip { display: block; font-style: normal; font-size: 11px; fo
 .hud-group { display: flex; gap: 6px; align-items: stretch; }
 .hud-group + .hud-group { padding-left: 10px; border-left: 1px solid var(--line); }
 .hud-label { writing-mode: vertical-rl; font-size: 11px; letter-spacing: 2px; color: var(--muted); align-self: center; }
-.lane-btn {
-  min-height: 60px; min-width: 100px; padding: 6px 10px; background: var(--panel-2); border: 1px solid var(--line-2); color: var(--text);
-  display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 2px; cursor: pointer; text-align: left;
-}
-.lane-btn b { font-family: var(--stencil); font-weight: 400; font-size: 13px; color: var(--gold); }
-.lane-btn span { font-size: 14px; font-weight: 900; }
-.lane-btn.active { background: var(--gold); border-color: var(--gold); color: #1b1405; }
-.lane-btn.active b { color: #1b1405; }
 .card {
   position: relative; width: 84px; min-height: 60px; padding: 6px 7px; background: var(--panel-2); border: 1px solid var(--line-2); color: var(--text);
   display: flex; flex-direction: column; align-items: flex-start; gap: 1px; cursor: pointer; overflow: hidden; text-align: left;
@@ -179,6 +167,46 @@ body.mobile .route-tip { display: block; font-style: normal; font-size: 11px; fo
 .card.armed { border-color: var(--fire); box-shadow: 0 0 0 2px var(--fire) inset; }
 .card.up { width: 90px; }
 .card.flash { animation: cardflash .35s; }
+.ubuy.flash { animation: cardflash .35s; }
+
+/* 據點面板 */
+.fort-box { width: 230px; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.fort-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.fort-name { margin: 0; font-size: 15px; font-weight: 900; color: var(--gold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fort-sub { margin: 0; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.fort-ctl { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 4px; }
+.fort-ctl button { min-height: 28px; padding: 0 6px; background: var(--panel-2); border: 1px solid var(--line-2); color: var(--text); font-size: 12px; font-weight: 900; cursor: pointer; white-space: nowrap; }
+.fort-ctl button:hover { border-color: var(--gold); }
+.fort-toggle.on { border-color: var(--gold); color: var(--gold); }
+.fort-tip { margin: 0; font-size: 11px; line-height: 1.35; color: var(--muted); }
+
+/* 兵種卡：上半部買兵、下半部選派出數量 */
+.ucard { position: relative; width: 92px; display: flex; flex-direction: column; background: var(--panel-2); border: 1px solid var(--line-2); }
+.ucard:hover { border-color: var(--gold); }
+.ucard .ubuy { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 5px 7px 3px; background: none; border: 0; color: var(--text); text-align: left; cursor: pointer; }
+.ucard .ubuy:hover { background: #29281b; }
+.ucard .ubuy b { font-family: var(--stencil); font-weight: 400; font-size: 12px; color: var(--gold); }
+.ucard .cn { font-size: 14px; font-weight: 900; white-space: nowrap; }
+.ucard .cc { font-size: 12px; color: var(--muted); }
+.ucard.poor .cc { color: #ff8a70; }
+.ucard.full .ubuy { opacity: .5; }
+.ucard .upick { display: flex; align-items: baseline; justify-content: center; gap: 1px; min-height: 26px; border: 0; border-top: 1px solid var(--line-2); background: #121209; color: var(--muted); font-weight: 900; cursor: pointer; }
+.ucard .upick::before { content: "派"; font-size: 11px; font-weight: 700; margin-right: 4px; }
+.ucard.has .upick { color: var(--text); }
+.ucard.picked .upick { background: var(--gold); color: #1b1405; }
+.upick .pk-n { font-size: 15px; }
+.upick .pk-of { font-size: 11px; }
+
+/* 選到部隊時的指令列 */
+.group-bar { position: absolute; left: 50%; top: 92px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 14px; background: rgba(10,10,8,.94); border: 1px solid var(--gold); z-index: 4; white-space: nowrap; }
+.group-bar button { min-height: 34px; padding: 0 12px; background: var(--panel-2); border: 1px solid var(--line-2); color: var(--text); font-size: 14px; font-weight: 900; cursor: pointer; }
+.group-bar button:hover { border-color: var(--gold); }
+.group-bar button.on { border-color: var(--gold); color: var(--gold); }
+.gb-desc { font-size: 14px; }
+.gb-desc b { color: var(--gold); }
+.gb-tip { font-size: 12px; color: var(--muted); }
+.fsub.warn { color: #ff8a70; }
+.pc-bounty { font-style: normal; background: var(--gold); color: #1b1405; padding: 0 4px; margin-right: 4px; }
 @keyframes cardflash { 0% { background: #5a4a1a } 100% { background: var(--panel-2) } }
 
 .feed { position: absolute; right: 16px; top: 96px; width: 300px; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
@@ -223,12 +251,18 @@ body.mobile .route-tip { display: block; font-style: normal; font-size: 11px; fo
 
 /* 桌機：左右欄拆開，按鈕排成一排 */
 .hud-col { display: contents; }
-.g-lanes { order: 1; }
+.g-fort { order: 1; }
 .g-units { order: 2; }
 .g-air { order: 3; }
-.g-ups { order: 4; margin-left: auto; }
-.ups-toggle { display: none !important; }
-.ups-pop { display: contents; }
+.g-ups { order: 4; }
+.g-ups { position: relative; }
+.ups-pop { display: none; }
+body:not(.mobile) .card.ups-toggle { width: 92px; }
+body:not(.mobile) .g-ups.open .ups-pop {
+  display: flex; position: absolute; right: 0; bottom: calc(100% + 12px); gap: 6px; padding: 6px;
+  background: rgba(8,8,6,.97); border: 1px solid var(--gold); z-index: 6;
+}
+body:not(.mobile) .g-ups.open .ups-toggle { border-color: var(--gold); }
 .pc-status { color: var(--muted); font-weight: 500; }
 .top-btns { display: inline-flex; gap: 6px; margin-left: 8px; vertical-align: middle; }
 .top-btns .btn { min-height: 32px; padding: 0 10px; }
@@ -249,7 +283,7 @@ body.mobile .route-tip { display: block; font-style: normal; font-size: 11px; fo
 /* ================================================================
    手機橫向：地圖在中間，左欄（路線、空軍、升級）右欄（出兵）給拇指點
    ================================================================ */
-body.mobile { --side: 108px; }
+body.mobile { --side: 122px; }
 body.mobile .mobile-only { display: flex !important; align-items: center; justify-content: center; }
 body.mobile #screen-game { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 body.mobile button { touch-action: manipulation; }
@@ -270,16 +304,32 @@ body.mobile .hud-col.right { right: 0; width: calc(var(--side) + env(safe-area-i
 body.mobile .hud-group { flex-direction: column; gap: 5px; margin: 0; }
 body.mobile .hud-group + .hud-group { padding-left: 0; border-left: 0; }
 body.mobile .hud-label { display: none; }
-body.mobile .g-lanes, body.mobile .g-air { flex: 2; min-height: 0; }
+body.mobile .g-fort { flex: 2.6; min-height: 0; }
+body.mobile .g-air { flex: 2; min-height: 0; }
+body.mobile .fort-box { width: 100%; height: 100%; justify-content: flex-start; gap: 4px; padding: 5px; background: var(--panel-2); border: 1px solid var(--line-2); }
+body.mobile .fort-head { flex-direction: column; align-items: flex-start; gap: 0; }
+body.mobile .fort-name { font-size: 14px; max-width: 100%; }
+body.mobile .fort-sub { font-size: 11px; }
+body.mobile .fort-ctl { flex: 1; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; }
+body.mobile .fort-ctl button { min-height: 0; font-size: 12px; padding: 0 2px; }
+body.mobile .fort-toggle { grid-column: 1 / -1; }
+body.mobile .fort-tip { font-size: 10px; white-space: normal; line-height: 1.3; }
+body.mobile .ucard { flex: 1; min-height: 0; width: 100%; flex-direction: row; }
+body.mobile .ucard .ubuy { min-width: 0; padding: 2px 6px; justify-content: center; }
+body.mobile .ucard .ubuy b { display: none; }
+body.mobile .ucard .cn { font-size: 13px; }
+body.mobile .ucard .cc { font-size: 11px; }
+body.mobile .ucard .upick { width: 40px; flex: none; min-height: 0; border-top: 0; border-left: 1px solid var(--line-2); flex-direction: column; align-items: center; justify-content: center; gap: 0; }
+body.mobile .ucard .upick::before { font-size: 9px; margin: 0; }
+body.mobile .upick .pk-n { font-size: 16px; line-height: 1; }
+body.mobile .upick .pk-of { font-size: 10px; }
+body.mobile .group-bar { top: auto; bottom: 6px; gap: 6px; padding: 4px 4px 4px 10px; }
+body.mobile .group-bar button { min-height: 36px; padding: 0 10px; font-size: 13px; }
+body.mobile .gb-desc { font-size: 13px; }
 body.mobile .g-ups { flex: 1; min-height: 0; position: relative; }
 body.mobile .g-units { flex: 1; min-height: 0; }
-body.mobile .g-lanes > button, body.mobile .g-air > button, body.mobile .g-units > button, body.mobile .ups-toggle { flex: 1; min-height: 0; }
-body.mobile .card, body.mobile .lane-btn { width: 100%; min-width: 0; min-height: 0; padding: 3px 8px; justify-content: center; }
-body.mobile .card b, body.mobile .lane-btn b { display: none; }
-body.mobile .card .cn, body.mobile .lane-btn span { font-size: 15px; }
-body.mobile .route-btn { justify-content: flex-start; text-align: left; }
-body.mobile .route-btn span { white-space: normal; font-size: 13px; line-height: 1.35; overflow: visible; word-break: break-all; }
-body.mobile .card .cc { font-size: 12px; }
+body.mobile .g-air > button, body.mobile .ups-toggle { flex: 1; min-height: 0; }
+body.mobile .card, body.mobile body.mobile .card b, body.mobile body.mobile .card .cn, body.mobile body.mobile .card .cc { font-size: 12px; }
 body.mobile .card.cooling::after { top: 3px; right: 5px; font-size: 12px; }
 body.mobile .card .cd { height: 5px; }
 body.mobile .ups-toggle { display: flex !important; }
@@ -311,7 +361,7 @@ body.mobile .top-btns { margin-left: 2px; }
 body.mobile .top-btns .btn.icon { min-height: 32px; width: 34px; }
 
 body.mobile .feed { display: none; }
-body.mobile .toast { bottom: 14px; font-size: 13px; max-width: 70vw; text-align: center; }
+body.mobile .toast { bottom: 58px; font-size: 13px; max-width: 70vw; text-align: center; }
 body.mobile .banner { top: 26%; }
 body.mobile .banner .b { font-size: clamp(24px, 7vh, 44px); padding: 10px 28px; letter-spacing: 8px; }
 body.mobile .target-hint { top: 40px; font-size: 13px; padding: 4px 4px 4px 12px; }

@@ -1,7 +1,9 @@
-// 前端共用的狀態：目前的房間、選到的路線、空軍瞄準模式，以及一個簡單的事件匯流排。
-import type { AirKind } from "@frontline/shared";
+// 前端共用的狀態：目前的房間、選到的據點與部隊、空軍瞄準模式，以及一個簡單的事件匯流排。
+import { UNIT_TYPES, type AirKind } from "@frontline/shared";
 import type { GameRoom } from "./net";
-import type { GameState, PlayerState } from "./types";
+import type { GameState, PlayerState, UnitState } from "./types";
+
+type UnitStateLike = UnitState;
 
 type Handler = (payload: any) => void;
 
@@ -19,15 +21,17 @@ class Bus {
 
 export const bus = new Bus();
 
-export interface Route {
-  node: number; // 從哪個據點出兵
-  lane: number; // 走哪條路
-}
-
 export const session = {
   room: null as GameRoom | null,
-  route: null as Route | null,
   airMode: null as AirKind | null,
+  /** 選到的自己據點（買兵、派兵從這裡） */
+  selectedNode: -1,
+  /** 要派出的各兵種數量（順序同 UNIT_TYPES）；全部是 0 = 全部派出 */
+  picks: UNIT_TYPES.map(() => 0),
+  /** 到了目的地據點（或佔下來後）要不要進駐 */
+  enter: true,
+  /** 選到的野外部隊（調度、撤退用） */
+  selectedUnits: [] as string[],
 
   get state(): GameState | null {
     // 剛連上時 state 還是空殼，等第一次同步完（有 players）才算數
@@ -49,6 +53,17 @@ export const session = {
   ownsNode(node: number): boolean {
     const n = this.state?.nodes[node];
     return !!n && n.owner === this.myId && n.hp > 0;
+  },
+  /** 我在某個據點裡、可以派出的駐軍（不含正在排隊出門的） */
+  garrison(node: number): UnitStateLike[] {
+    const out: UnitStateLike[] = [];
+    this.state?.units.forEach((u) => {
+      if (u.owner === this.myId && u.inNode === node && u.mode === "hold" && u.hp > 0) out.push(u);
+    });
+    return out;
+  },
+  clearPicks() {
+    this.picks = UNIT_TYPES.map(() => 0);
   },
   send(type: string, payload?: unknown) {
     this.room?.send(type, payload ?? {});

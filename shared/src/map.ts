@@ -349,3 +349,194 @@ export function nearestLanePos(map: MapLayout, px: number, py: number): { lane: 
   });
   return best;
 }
+
+// ================================================================ 路徑規劃（派兵、調度、撤退共用；前端拿來畫預覽）
+
+/** 派兵目的地：據點，或某條路上的某個位置 */
+export type Dest = { node: number } | { lane: number; x: number };
+/** 出發點：從據點出發，或從某條路上的某個位置出發 */
+export type RouteStart = { node: number } | { lane: number; x: number };
+
+/**
+ * 規劃結果：
+ * - dir：從路上出發時，先往這條路的哪一端走（從據點出發時是 0）
+ * - lanes：之後依序要走的路（到了路的盡頭就換下一條）
+ * - length：總長度（像素）
+ */
+export interface RoutePlan {
+  dir: 1 | -1 | 0;
+  lanes: number[];
+  length: number;
+}
+
+interface Search {
+  dist: number[];
+  prev: number[]; // 走哪條路到這個據點
+  root: number[]; // 從哪個起點出發
+}
+
+function search(map: MapLayout, sources: { node: number; cost: number }[]): Search {
+  const n = map.nodes.length;
+  const dist = new Array<number>(n).fill(Infinity);
+  const prev = new Array<number>(n).fill(-1);
+  const root = new Array<number>(n).fill(-1);
+  const done = new Array<boolean>(n).fill(false);
+  for (const s of sources) {
+    if (s.cost < dist[s.node]) {
+      dist[s.node] = s.cost;
+      root[s.node] = s.node;
+      prev[s.node] = -1;
+    }
+  }
+  for (let it = 0; it < n; it++) {
+    let cur = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && (cur < 0 || dist[i] < dist[cur])) cur = i;
+    if (cur < 0 || dist[cur] === Infinity) break;
+    done[cur] = true;
+    for (const li of map.adj[cur]) {
+      const lane = map.lanes[li];
+      const nb = lane.a === cur ? lane.b : lane.a;
+      const d = dist[cur] + lane.len;
+      if (d < dist[nb]) {
+        dist[nb] = d;
+        prev[nb] = li;
+        root[nb] = root[cur];
+      }
+    }
+  }
+  return { dist, prev, root };
+}
+
+function lanesTo(map: MapLayout, sr: Search, target: number): number[] {
+  const out: number[] = [];
+  let cur = target;
+  for (let guard = 0; guard < 200 && sr.prev[cur] >= 0; guard++) {
+    const li = sr.prev[cur];
+    out.push(li);
+    const lane = map.lanes[li];
+    cur = lane.a === cur ? lane.b : lane.a;
+  }
+  return out.reverse();
+}
+
+function searchFrom(map: MapLayout, start: RouteStart): Search {
+  if ("node" in start) return search(map, [{ node: start.node, cost: 0 }]);
+  const lane = map.lanes[start.lane];
+  return search(map, [
+    { node: lane.a, cost: start.x },
+    { node: lane.b, cost: lane.len - start.x },
+  ]);
+}
+
+/** 起點是路上時，看最短路是從這條路的哪一端出去的 */
+function firstDir(map: MapLayout, start: RouteStart, sr: Search, target: number): 1 | -1 | 0 {
+  if ("node" in start) return 0;
+  return sr.root[target] === map.lanes[start.lane].a ? -1 : 1;
+}
+
+function validNode(map: MapLayout, n: unknown): n is number {
+  return typeof n === "number" && Number.isInteger(n) && n >= 0 && n < map.nodes.length;
+}
+function validRoad(map: MapLayout, d: { lane: number; x: number }) {
+  return Number.isInteger(d.lane) && d.lane >= 0 && d.lane < map.lanes.length && Number.isFinite(d.x);
+}
+
+/** 從起點經過 via（依序）到 dest 的最短路；走不到回傳 null */
+export function planRoute(map: MapLayout, start: RouteStart, via: number[], dest: Dest): RoutePlan | null {
+  if ("node" in start ? !validNode(map, start.node) : !validRoad(map, start)) return null;
+  if ("node" in dest ? !validNode(map, dest.node) : !validRoad(map, dest)) return null;
+  let cur: RouteStart = start;
+  let dir: 1 | -1 | 0 = 0;
+  let first = true;
+  const lanes: number[] = [];
+  let length = 0;
+  const stops: number[] = [];
+  for (const v of via.slice(0, 12)) {
+    if (!validNode(map, v)) continue;
+    if (stops.length ? stops[stops.length - 1] === v : "node" in start && start.node === v) continue;
+    stops.push(v);
+  }
+  if ("node" in dest) while (stops.length && stops[stops.length - 1] === dest.node) stops.pop();
+
+  for (const v of stops) {
+    const sr = searchFrom(map, cur);
+    if (sr.dist[v] === Infinity) return null;
+    if (first) dir = firstDir(map, cur, sr, v);
+    lanes.push(...lanesTo(map, sr, v));
+    length += sr.dist[v];
+    cur = { node: v };
+    first = false;
+  }
+
+  if ("node" in dest) {
+    const sr = searchFrom(map, cur);
+    if (sr.dist[dest.node] === Infinity) return null;
+    if (first) dir = firstDir(map, cur, sr, dest.node);
+    lanes.push(...lanesTo(map, sr, dest.node));
+    length += sr.dist[dest.node];
+    return { dir, lanes, length };
+  }
+
+  const L = map.lanes[dest.lane];
+  const x = Math.max(0, Math.min(L.len, dest.x));
+  if (!("node" in cur) && cur.lane === dest.lane) {
+    // 同一條路上：直接走過去
+    return { dir: first ? (x >= cur.x ? 1 : -1) : dir, lanes, length: length + Math.abs(x - cur.x) };
+  }
+  const sr = searchFrom(map, cur);
+  const viaA = sr.dist[L.a] + x;
+  const viaB = sr.dist[L.b] + (L.len - x);
+  if (!Number.isFinite(Math.min(viaA, viaB))) return null;
+  const end = viaA <= viaB ? L.a : L.b;
+  if (first) dir = firstDir(map, cur, sr, end);
+  lanes.push(...lanesTo(map, sr, end), dest.lane);
+  length += Math.min(viaA, viaB);
+  return { dir, lanes, length };
+}
+
+/** 從起點沿路走，最近的符合條件的據點（撤退用）；找不到回傳 -1 */
+export function nearestNode(map: MapLayout, start: RouteStart, pred: (node: number) => boolean): number {
+  const sr = searchFrom(map, start);
+  let best = -1;
+  for (let i = 0; i < map.nodes.length; i++) if (pred(i) && sr.dist[i] < Infinity && (best < 0 || sr.dist[i] < sr.dist[best])) best = i;
+  return best;
+}
+
+/** 兩個據點之間的道路距離 */
+export function nodeDistance(map: MapLayout, a: number, b: number): number {
+  return search(map, [{ node: a, cost: 0 }]).dist[b];
+}
+
+/** 把規劃結果轉成畫面上的折線（畫預覽用） */
+export function routePoints(map: MapLayout, start: RouteStart, plan: RoutePlan, dest: Dest, step = 16): Vec[] {
+  const pts: Vec[] = [];
+  const walk = (li: number, from: number, to: number) => {
+    const lane = map.lanes[li];
+    const n = Math.max(1, Math.ceil(Math.abs(to - from) / step));
+    for (let i = 0; i <= n; i++) {
+      const p = lanePoint(lane, from + ((to - from) * i) / n);
+      pts.push({ x: p.x, y: p.y });
+    }
+  };
+  let node: number;
+  if ("node" in start) node = start.node;
+  else {
+    const lane = map.lanes[start.lane];
+    const onlyThis = plan.lanes.length === 0 && !("node" in dest) && dest.lane === start.lane;
+    if (onlyThis) {
+      walk(start.lane, start.x, Math.max(0, Math.min(lane.len, (dest as { x: number }).x)));
+      return pts;
+    }
+    node = plan.dir < 0 ? lane.a : lane.b;
+    walk(start.lane, start.x, plan.dir < 0 ? 0 : lane.len);
+  }
+  plan.lanes.forEach((li, i) => {
+    const lane = map.lanes[li];
+    const from = nodeEnd(lane, node);
+    const last = i === plan.lanes.length - 1;
+    const to = last && !("node" in dest) && dest.lane === li ? Math.max(0, Math.min(lane.len, dest.x)) : lane.len - from;
+    walk(li, from, to);
+    node = otherEnd(lane, node);
+  });
+  return pts;
+}

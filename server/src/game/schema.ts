@@ -13,14 +13,14 @@ export const Player = schema(
     alive: t.boolean().default(true),
     rank: t.uint8().default(0), // 名次（出局時決定，贏家 = 1）
     funds: t.uint32().default(0),
-    income: t.float32().default(0),
+    income: t.float32().default(0), // 每秒收入（還沒扣養兵費）
+    upkeep: t.float32().default(0), // 每秒養兵費
+    pop: t.uint8().default(0), // 目前人口（野外＋駐軍）
     forts: t.uint8().default(0), // 擁有幾個據點（含大本營）
     firepower: t.uint8().default(0),
     armor: t.uint8().default(0),
     logistics: t.uint8().default(0),
-    deployReady: t.array("float32"), // 各兵種下次可部署時間，順序同 UNIT_TYPES
     airReady: t.array("float32"), // 空軍下次可用時間，順序同 AIR_KINDS
-    unitCount: t.uint8().default(0),
     kills: t.uint16().default(0),
     captures: t.uint8().default(0),
     deployed: t.uint16().default(0),
@@ -44,6 +44,7 @@ export const MapNode = schema(
     capturer: t.string().default(""), // 正在佔領的玩家
     capFaction: t.int8().default(-1),
     progress: t.float32().default(0), // 佔領進度 0~1
+    incomeAt: t.float32().default(0), // 剛佔下來時，到這個時間才開始產錢
     shots: t.uint8().default(0),
     tl: t.int8().default(0), // 最近一次射擊目標所在的路
     tx: t.float32().default(0),
@@ -75,8 +76,17 @@ export const Unit = schema(
     tl: t.uint8().default(0), // 最近一次射擊目標所在的路
     tx: t.float32().default(0),
     landT: t.float32().default(0),
+    inNode: t.int8().default(-1), // 駐紮在哪個據點裡（-1 = 在野外）
+    group: t.string().default(""), // 同一次派出／調度的部隊共用一個編號（點一下就能選整隊）
+    mode: t.string().default("move"), // move 前進、hold 駐守、retreat 撤退
+    enter: t.boolean().default(true), // 到了目的地據點（或佔下來後）要不要進駐
+    destNode: t.int8().default(-1), // 目的地據點（-1 = 目的地在路上）
+    destLane: t.int8().default(-1),
+    destX: t.float32().default(0),
+    route: t.array("uint8"), // 之後要走的路
 
     cooldownLeft: t.number().noSync().default(0),
+    departAt: t.number().noSync().default(0), // 排隊出門的時間（0 = 沒有要出門）
   },
   "Unit",
 );
@@ -147,6 +157,7 @@ export const BattleState = schema(
     structures: t.map(Structure),
     aircraft: t.map(Aircraft),
     fronts: t.array("float32"), // 每條路上雙方交戰的位置（畫面用）
+    leaderId: t.string().default(""), // 被懸賞的領先者
   },
   "BattleState",
 );

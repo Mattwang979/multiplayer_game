@@ -1,6 +1,8 @@
 // 一個房間 = 一局遊戲。負責大廳（加入、加電腦、開始）、轉送玩家指令給模擬、斷線代管。
 import { Room, matchMaker, type Client } from "colyseus";
 import {
+  KICK_CODE,
+  type Dest,
   AIR_KINDS,
   MAPS,
   BUILD_KINDS,
@@ -67,7 +69,7 @@ export class BattleRoom extends Room<{ state: BattleState }> {
         this.syncMatchmaking();
       } else {
         const c = this.clients.getById(p.id);
-        c?.leave(4000);
+        c?.leave(KICK_CODE);
       }
     },
     setFaction: (client: Client, msg: { faction?: number }) => {
@@ -92,10 +94,24 @@ export class BattleRoom extends Room<{ state: BattleState }> {
     },
 
     // ---------- 戰鬥指令 ----------
-    spawn: (client: Client, msg: { type?: string; lane?: number; node?: number }) => {
+    buy: (client: Client, msg: { node?: number; type?: string; count?: number }) => {
       const type = msg?.type as UnitType;
       if (!UNIT_TYPES.includes(type)) return;
-      this.reply(client, this.battle.spawn(client.sessionId, type, num(msg?.lane), num(msg?.node)));
+      this.reply(client, this.battle.buy(client.sessionId, num(msg?.node), type, num(msg?.count)));
+    },
+    dispatch: (client: Client, msg: { node?: number; counts?: number[]; via?: number[]; dest?: unknown; enter?: boolean }) => {
+      const dest = cleanDest(msg?.dest);
+      if (!dest) return;
+      const counts = Array.isArray(msg?.counts) ? msg.counts.slice(0, UNIT_TYPES.length).map(num) : [];
+      this.reply(client, this.battle.dispatch(client.sessionId, num(msg?.node), counts, numList(msg?.via), dest, msg?.enter !== false));
+    },
+    order: (client: Client, msg: { units?: unknown; via?: number[]; dest?: unknown; enter?: boolean }) => {
+      const dest = cleanDest(msg?.dest);
+      if (!dest) return;
+      this.reply(client, this.battle.order(client.sessionId, idList(msg?.units), numList(msg?.via), dest, msg?.enter !== false));
+    },
+    retreat: (client: Client, msg: { units?: unknown }) => {
+      this.reply(client, this.battle.retreat(client.sessionId, idList(msg?.units)));
     },
     build: (client: Client, msg: { lane?: number; node?: number; slot?: number; kind?: string }) => {
       const kind = msg?.kind as BuildKind;
@@ -255,4 +271,24 @@ export class BattleRoom extends Room<{ state: BattleState }> {
   private notice(client: Client, text: string) {
     client.send("notice", { text });
   }
+}
+
+function numList(v: unknown): number[] {
+  return Array.isArray(v) ? v.slice(0, 12).map(num).filter((n) => Number.isInteger(n)) : [];
+}
+
+function idList(v: unknown): string[] {
+  return Array.isArray(v) ? v.slice(0, 80).filter((x): x is string => typeof x === "string" && x.length < 24) : [];
+}
+
+function cleanDest(v: unknown): Dest | null {
+  if (!v || typeof v !== "object") return null;
+  const d = v as { node?: unknown; lane?: unknown; x?: unknown };
+  if (d.node !== undefined) {
+    const node = num(d.node);
+    return Number.isInteger(node) ? { node } : null;
+  }
+  const lane = num(d.lane);
+  const x = num(d.x);
+  return Number.isInteger(lane) && Number.isFinite(x) ? { lane, x } : null;
 }

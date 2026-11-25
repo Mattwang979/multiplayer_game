@@ -1,11 +1,13 @@
-// 對局中的介面：上方玩家血量與計時、下方出兵／空軍／升級按鈕、提示條、工事選單、結算畫面。
+// 對局中的介面：上方玩家血量與計時、下方據點面板（買兵、選派出數量）／空軍／升級、
+// 選到部隊時的指令列（撤退、進駐）、提示條、工事選單、結算畫面。
 import {
   AIRCRAFT,
   AIR_KINDS,
   BUILD_KINDS,
   FACTIONS,
-  MAX_UNITS_PER_PLAYER,
+  GARRISON_CAP,
   MAX_UPGRADE_LEVEL,
+  POP_CAP,
   STRUCTURES,
   UNITS,
   UNIT_TYPES,
@@ -13,15 +15,14 @@ import {
   UPGRADE_KINDS,
   WINNER_DRAW,
   buildMap,
-  nodeLanes,
-  otherEnd,
   type AirKind,
   type MapLayout,
+  type UnitType,
 } from "@frontline/shared";
 import { enterFullscreen, exitFullscreen, isFullscreen, isMobile, isStandalone } from "../device";
 import { initAudio, isMusicOn, isMuted, play, setMusicIntensity, stopMusic, toggleMusic, toggleMute } from "../game/sound";
-import { bus, session, type Route } from "../session";
-import type { PlayerState } from "../types";
+import { bus, session } from "../session";
+import type { PlayerState, UnitState } from "../types";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -43,6 +44,7 @@ export class Hud {
   private toast = $("toast");
   private feed = $("feed");
   private buildMenu = $("build-menu");
+  private groupBar = $("group-bar");
   private targetHint = $("target-hint");
   private result = $("result");
   private map: MapLayout | null = null;
@@ -58,7 +60,8 @@ export class Hud {
     this.offs.push(
       bus.on("toast", (t: string) => this.showToast(t)),
       bus.on("banner", (b: { kind: string; text: string; sub?: string; color?: string }) => this.showBanner(b.kind, b.text, b.sub, b.color)),
-      bus.on("routeChanged", () => this.renderRoute()),
+      bus.on("nodeSelected", () => play("click", 0.4)),
+      bus.on("leader", (m: { id: string; faction: number }) => this.onLeader(m)),
       bus.on("airMode", () => this.refreshAir()),
       bus.on("buildMenu", (m: { lane: number; node: number; slot: number; x: number; y: number } | null) => this.openBuildMenu(m)),
       bus.on("notice", (m: { text: string }) => {
@@ -75,7 +78,9 @@ export class Hud {
     );
     window.addEventListener("keydown", this.onKey);
     this.bottom.addEventListener("click", this.onClick);
+    this.bottom.addEventListener("contextmenu", this.onContext);
     this.buildMenu.addEventListener("click", this.onBuildClick);
+    this.groupBar.addEventListener("click", this.onGroupClick);
     this.result.addEventListener("click", this.onResultClick);
     $("target-cancel").addEventListener("click", () => {
       session.airMode = null;
@@ -97,7 +102,11 @@ export class Hud {
     this.hurtUntil = 0;
     this.feed.innerHTML = "";
     session.airMode = null;
-    session.route = null;
+    session.selectedNode = -1;
+    session.selectedUnits = [];
+    session.enter = true;
+    session.clearPicks();
+    this.groupBar.classList.add("hidden");
   }
 
   // ================================================================ 每一格更新
@@ -113,9 +122,10 @@ export class Hud {
     }
     if (!this.map) return;
     if (this.builtFor !== this.mapId) this.buildBottom();
-    this.ensureRoute(me);
+    this.ensureSelection(me);
     this.renderTop(me);
     this.renderBottom(me);
+    this.renderGroupBar();
 
     this.updateMusic(me);
     if (s.phase === "ended" && !this.resultShown) {
@@ -165,7 +175,7 @@ export class Hud {
         const status = !p.alive ? "已出局" : !p.connected ? "斷線・電腦代管" : p.isBot ? "電腦" : "";
         return `<div class="pcard${p.id === me.id ? " me" : ""}${p.alive ? "" : " out"}">
           <p class="pc-name" style="color:${f.light}"><span class="pc-f">${f.name}・</span>${esc(p.name)}${p.id === me.id ? "（你）" : ""}${status ? ` <span class="pc-status">${status}</span>` : ""}</p>
-          <div class="pc-row"><div class="bar${hit ? " hit" : ""}"><i style="width:${(ratio * 100).toFixed(1)}%;background:${f.bar}"></i></div>${p.alive ? `<span class="pc-forts" title="擁有的堡壘數">堡 ${p.forts}</span>` : ""}</div>
+          <div class="pc-row"><div class="bar${hit ? " hit" : ""}"><i style="width:${(ratio * 100).toFixed(1)}%;background:${f.bar}"></i></div>${p.alive ? `<span class="pc-forts" title="擁有的堡壘數">${p.id === s.leaderId ? '<em class="pc-bounty" title="堡壘最多：被懸賞中">懸賞</em>' : ""}堡 ${p.forts}</span>` : ""}</div>
         </div>`;
       })
       .join("");
@@ -197,7 +207,14 @@ export class Hud {
     timer.classList.toggle("urgent", left < 60);
     setText(timer.querySelector("strong")!, `${mm}:${ss}`);
     setText(this.top.querySelector(".funds strong")!, `$${me.funds.toLocaleString()}`);
-    setText(this.top.querySelector(".fsub")!, isMobile() ? `+${me.income.toFixed(1)}/秒` : `軍費 +${me.income.toFixed(1)}/秒・部隊 ${me.unitCount}/${MAX_UNITS_PER_PLAYER}`);
+    const net = me.income - me.upkeep;
+    setText(
+      this.top.querySelector(".fsub")!,
+      isMobile()
+        ? `${net >= 0 ? "+" : ""}${net.toFixed(1)}/秒`
+        : `收入 +${me.income.toFixed(1)}・養兵 -${me.upkeep.toFixed(1)}/秒・兵力 ${me.pop}/${POP_CAP}`,
+    );
+    this.top.querySelector(".fsub")!.classList.toggle("warn", me.upkeep >= me.income * 0.5 && me.upkeep > 0);
     const mute = this.top.querySelector<HTMLElement>('[data-act="mute"]')!;
     const muteKey = isMuted() ? "off" : "on";
     if (mute.dataset.state !== muteKey) {
@@ -226,7 +243,10 @@ export class Hud {
     this.builtFor = this.mapId;
     const units = UNIT_TYPES.map((t) => {
       const d = UNITS[t];
-      return `<button class="card" data-unit="${t}" title="${d.short}"><b>${d.hotkey}</b><span class="cn">${d.name}</span><span class="cc">$${d.cost}</span><i class="cd"></i></button>`;
+      return `<div class="ucard" data-type="${t}" title="${d.name}：${d.short}（人口 ${d.pop}）">
+        <button class="ubuy" data-buy="${t}"><b>${d.hotkey}</b><span class="cn">${d.name}</span><span class="cc">$${d.cost}</span></button>
+        <button class="upick" data-pick="${t}" aria-label="選要派出幾支${d.name}"><span class="pk-n">0</span><span class="pk-of">/0</span></button>
+      </div>`;
     }).join("");
     const air = AIR_KINDS.map((k) => {
       const d = AIRCRAFT[k];
@@ -236,11 +256,19 @@ export class Hud {
       const d = UPGRADES[k];
       return `<button class="card up" data-up="${k}" title="${d.short}"><b>${d.hotkey}</b><span class="cn" data-up-name="${k}">${d.name}</span><span class="cc" data-up-cost="${k}"></span></button>`;
     }).join("");
-    // 桌機：一整排在下方；手機橫向：左欄（路線、空軍、升級）+ 右欄（出兵），由 CSS 切換
+    // 桌機：一整排在下方；手機橫向：左欄（據點、空軍、升級）+ 右欄（買兵、選數量），由 CSS 切換
     this.bottom.innerHTML = `
       <div class="hud-col left">
-        <div class="hud-group g-lanes"><span class="hud-label">出兵路線</span>
-          <button class="lane-btn route-btn" data-act="route-next" aria-label="換下一條出兵路線"><b>W</b><span data-route></span><em class="route-tip">點這裡或點地圖換路線</em></button>
+        <div class="hud-group g-fort"><span class="hud-label">據點</span>
+          <div class="fort-box">
+            <div class="fort-head"><p class="fort-name" data-fort-name></p><p class="fort-sub" data-fort-sub></p></div>
+            <div class="fort-ctl">
+              <button class="fort-toggle" data-act="enter" aria-pressed="true"></button>
+              <button data-act="pick-all">全選</button>
+              <button data-act="pick-none">清除</button>
+            </div>
+            <p class="fort-tip">${isMobile() ? "從據點拖到目的地派兵" : "從據點拖到目的地派兵・沒選數量＝全部派出"}</p>
+          </div>
         </div>
         <div class="hud-group g-air"><span class="hud-label">空軍</span>${air}</div>
         <div class="hud-group g-ups"><span class="hud-label">升級</span>
@@ -249,22 +277,67 @@ export class Hud {
         </div>
       </div>
       <div class="hud-col right">
-        <div class="hud-group g-units"><span class="hud-label">地面部隊</span>${units}</div>
+        <div class="hud-group g-units"><span class="hud-label">買兵<br>派出數量</span>${units}</div>
       </div>`;
-    this.renderRoute();
+  }
+
+  /** 選到的據點丟了就換回大本營；選到的部隊死了或進駐了就移出選取 */
+  private ensureSelection(me: PlayerState) {
+    const s = session.state!;
+    if (!session.ownsNode(session.selectedNode)) {
+      let next = session.ownsNode(me.hq) ? me.hq : -1;
+      if (next < 0) for (let i = 0; i < s.nodes.length; i++) if (session.ownsNode(i)) { next = i; break; }
+      session.selectedNode = next;
+      session.clearPicks();
+    }
+    if (session.selectedUnits.length) {
+      const alive = session.selectedUnits.filter((id) => {
+        const u = s.units.get(id);
+        return !!u && u.inNode < 0 && u.owner === me.id;
+      });
+      if (alive.length !== session.selectedUnits.length) {
+        session.selectedUnits = alive;
+        bus.emit("unitsSelected", alive);
+      }
+    }
   }
 
   private renderBottom(me: PlayerState) {
     const s = session.state!;
     const dead = !me.alive || s.phase !== "playing";
     this.bottom.style.opacity = dead ? "0.5" : "1";
+    const node = session.selectedNode;
+    const n = node >= 0 ? s.nodes[node] : undefined;
+    const inside = node >= 0 ? session.garrison(node) : [];
+    const have = UNIT_TYPES.map((t) => inside.filter((u) => u.type === t).length);
+    // 選的數量不能超過駐軍
+    UNIT_TYPES.forEach((_, i) => {
+      if (session.picks[i] > have[i]) session.picks[i] = have[i];
+    });
+    let used = 0;
+    s.units.forEach((u) => {
+      if (u.owner === me.id && u.inNode === node) used += UNITS[u.type as UnitType]?.pop ?? 1;
+    });
+    const cap = n ? GARRISON_CAP[n.kind] ?? GARRISON_CAP.fort : 0;
+    setText(this.bottom.querySelector("[data-fort-name]")!, node >= 0 ? this.nodeName(node) : "沒有據點");
+    const grace = n ? Math.ceil(n.incomeAt - s.time) : 0;
+    setText(this.bottom.querySelector("[data-fort-sub]")!, n ? `駐軍 ${used}/${cap}${grace > 0 ? `・整頓 ${grace}s` : ""}` : "");
+    const tog = this.bottom.querySelector<HTMLElement>('[data-act="enter"]')!;
+    setText(tog, session.enter ? "佔領後進駐 ✓" : "佔領後進駐 ✗");
+    tog.classList.toggle("on", session.enter);
+    tog.setAttribute("aria-pressed", String(session.enter));
+
     UNIT_TYPES.forEach((t, i) => {
-      const el = this.bottom.querySelector<HTMLElement>(`[data-unit="${t}"]`);
-      if (!el) return;
+      const card = this.bottom.querySelector<HTMLElement>(`.ucard[data-type="${t}"]`);
+      if (!card) return;
       const d = UNITS[t];
-      const ready = me.deployReady[i] ?? 0;
-      const left = ready - s.time;
-      this.cardState(el, me.funds < d.cost, left, d.deployCooldown);
+      const full = used + d.pop > cap || me.pop + d.pop > POP_CAP;
+      card.classList.toggle("poor", me.funds < d.cost);
+      card.classList.toggle("full", full);
+      card.classList.toggle("has", have[i] > 0);
+      card.classList.toggle("picked", session.picks[i] > 0);
+      setText(card.querySelector(".pk-n")!, `${session.picks[i]}`);
+      setText(card.querySelector(".pk-of")!, `/${have[i]}`);
     });
     AIR_KINDS.forEach((k, i) => {
       const el = this.bottom.querySelector<HTMLElement>(`[data-air="${k}"]`);
@@ -300,44 +373,36 @@ export class Hud {
     if (bar) bar.style.width = cooling ? `${Math.max(0, Math.min(1, 1 - left / total)) * 100}%` : "0%";
   }
 
-  /** 我可以出兵的所有路線：每個自己的據點 × 它連出去的路（大本營排最前面） */
-  private routes(me: PlayerState): Route[] {
+  /** 選到部隊時的指令列 */
+  private renderGroupBar() {
     const s = session.state!;
-    if (!this.map) return [];
-    const out: Route[] = [];
-    const nodes: number[] = [];
-    for (let i = 0; i < s.nodes.length; i++) if (session.ownsNode(i)) nodes.push(i);
-    nodes.sort((a, b) => (a === me.hq ? -1 : b === me.hq ? 1 : a - b));
-    for (const node of nodes) for (const lane of nodeLanes(this.map, node)) out.push({ node, lane });
-    return out;
-  }
-
-  /** 選的路線失效（據點丟了）就自動換一條 */
-  private ensureRoute(me: PlayerState) {
-    const r = session.route;
-    if (r && session.ownsNode(r.node)) return;
-    const list = this.routes(me);
-    const outward = (x: Route) => !session.ownsNode(otherEnd(this.map!.lanes[x.lane], x.node));
-    // 優先：同一個據點通往外面的路 → 同一個據點的其他路 → 任何通往外面的路 → 第一條
-    session.route =
-      list.find((x) => x.node === r?.node && outward(x)) ??
-      list.find((x) => x.node === r?.node) ??
-      list.find(outward) ??
-      list[0] ??
-      null;
-    this.renderRoute();
-  }
-
-  private cycleRoute(step: number) {
-    const me = session.me();
-    if (!me) return;
-    const list = this.routes(me);
-    if (!list.length) return;
-    const r = session.route;
-    const idx = r ? list.findIndex((x) => x.node === r.node && x.lane === r.lane) : -1;
-    session.route = list[(idx + step + list.length) % list.length];
-    bus.emit("routeChanged", session.route);
-    play("click", 0.6);
+    const ids = session.selectedUnits;
+    const bar = this.groupBar;
+    if (!ids.length || s.phase !== "playing") {
+      bar.classList.add("hidden");
+      return;
+    }
+    const units = ids.map((id) => s.units.get(id)).filter((u): u is UnitState => !!u);
+    const byType = new Map<string, number>();
+    units.forEach((u) => byType.set(u.type, (byType.get(u.type) ?? 0) + 1));
+    const desc = [...byType.entries()].map(([t, c]) => `${UNITS[t as UnitType]?.name ?? t}×${c}`).join("、");
+    const first = units[0];
+    let where = "";
+    if (first) {
+      if (first.mode === "retreat") where = "撤退中";
+      else if (first.destNode >= 0) where = `${first.mode === "hold" ? "守在" : "前往"} ${this.nodeName(first.destNode)}`;
+      else where = first.mode === "hold" ? "在路上駐守" : "前往路上";
+    }
+    const html = `<span class="gb-desc"><b>${units.length} 支</b>${isMobile() ? "" : `（${desc}）`}・${where}</span>
+      <button data-g="retreat">撤退</button>
+      <button data-g="enter" class="${session.enter ? "on" : ""}">${session.enter ? "到了進駐 ✓" : "到了進駐 ✗"}</button>
+      <button data-g="close" aria-label="取消選取">✕</button>
+      ${isMobile() ? "" : '<span class="gb-tip">拖曳部隊或點地圖上的目的地來調度・R 撤退</span>'}`;
+    if (bar.dataset.html !== html) {
+      bar.dataset.html = html;
+      bar.innerHTML = html;
+    }
+    bar.classList.remove("hidden");
   }
 
   private nodeName(node: number) {
@@ -347,20 +412,6 @@ export class Hud {
     const nd = this.map?.nodes[node];
     if (owner && nd?.kind === "hq") return `${FACTIONS[owner.faction].name}大本營`;
     return nd?.name ?? "";
-  }
-
-  private renderRoute() {
-    const el = this.bottom.querySelector<HTMLElement>("[data-route]");
-    if (!el || !this.map) return;
-    const r = session.route;
-    let text = "沒有可用路線";
-    if (r) {
-      const to = otherEnd(this.map.lanes[r.lane], r.node);
-      const owner = session.ownerOf(to);
-      const tag = !owner ? "無主" : owner.id === session.myId ? "己方" : FACTIONS[owner.faction].name;
-      text = `${this.nodeName(r.node)} → ${this.nodeName(to)}（${tag}）`;
-    }
-    setText(el, text);
   }
 
   private refreshAir() {
@@ -383,15 +434,99 @@ export class Hud {
       play("click");
       return;
     }
-    if (el.dataset.act === "route-next") this.cycleRoute(1);
-    else if (el.dataset.unit) this.deploy(el.dataset.unit, el);
-    else if (el.dataset.air) this.armAir(el.dataset.air as AirKind);
+    if (el.dataset.buy) this.buy(el.dataset.buy as UnitType, e.shiftKey ? 5 : 1, el);
+    else if (el.dataset.pick) this.pick(el.dataset.pick as UnitType, 1, true);
+    else if (el.dataset.act === "pick-all") this.pickAll();
+    else if (el.dataset.act === "pick-none") {
+      session.clearPicks();
+      play("click", 0.5);
+    } else if (el.dataset.act === "enter") {
+      session.enter = !session.enter;
+      play("click", 0.5);
+    } else if (el.dataset.air) this.armAir(el.dataset.air as AirKind);
     else if (el.dataset.up) {
       session.send("upgrade", { kind: el.dataset.up });
       play("click");
     }
     if (!el.dataset.up) this.bottom.querySelector(".g-ups")?.classList.remove("open");
   };
+
+  /** 右鍵點數量 = 減一 */
+  private onContext = (e: MouseEvent) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>("button[data-pick]");
+    if (!el) return;
+    e.preventDefault();
+    this.pick(el.dataset.pick as UnitType, -1, false);
+  };
+
+  private onGroupClick = (e: MouseEvent) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>("button[data-g]");
+    if (!el) return;
+    const ids = session.selectedUnits;
+    if (el.dataset.g === "retreat") this.retreat();
+    else if (el.dataset.g === "enter") {
+      session.enter = !session.enter;
+      // 已經在往某個據點走的部隊：用新的設定再下一次同樣的指令
+      const s = session.state!;
+      const first = s.units.get(ids[0]);
+      if (first && first.destNode >= 0 && first.mode !== "retreat") {
+        session.send("order", { units: ids, via: [], dest: { node: first.destNode }, enter: session.enter });
+      }
+      play("click", 0.5);
+    } else if (el.dataset.g === "close") {
+      session.selectedUnits = [];
+      bus.emit("unitsSelected", []);
+    }
+  };
+
+  private retreat() {
+    if (!session.selectedUnits.length) return;
+    session.send("retreat", { units: session.selectedUnits });
+    play("click", 0.7);
+    this.addFeed("部隊撤退中，回到最近的據點會自動進駐回血", "#f4f1e6");
+  }
+
+  private buy(type: UnitType, count: number, el: HTMLElement | null) {
+    const node = session.selectedNode;
+    if (node < 0) return;
+    session.send("buy", { node, type, count });
+    el?.classList.remove("flash");
+    void el?.offsetWidth;
+    el?.classList.add("flash");
+    play("deploy", 0.6);
+  }
+
+  /** 調整要派出的數量；wrap = 加到超過駐軍數就回到 0（手機點一下循環） */
+  private pick(type: UnitType, step: number, wrap: boolean) {
+    const i = UNIT_TYPES.indexOf(type);
+    const have = session.garrison(session.selectedNode).filter((u) => u.type === type).length;
+    if (have === 0) {
+      this.showToast("這座據點裡沒有這種兵，先點左邊買");
+      return;
+    }
+    let v = session.picks[i] + step;
+    if (v > have) v = wrap ? 0 : have;
+    if (v < 0) v = 0;
+    session.picks[i] = v;
+    play("click", 0.4);
+  }
+
+  private pickAll() {
+    const inside = session.garrison(session.selectedNode);
+    session.picks = UNIT_TYPES.map((t) => inside.filter((u) => u.type === t).length);
+    play("click", 0.5);
+  }
+
+  private cycleNode(step: number) {
+    const s = session.state!;
+    const list: number[] = [];
+    for (let i = 0; i < s.nodes.length; i++) if (session.ownsNode(i)) list.push(i);
+    if (!list.length) return;
+    const idx = list.indexOf(session.selectedNode);
+    session.selectedNode = list[(idx + step + list.length) % list.length];
+    session.clearPicks();
+    bus.emit("nodeSelected", session.selectedNode);
+  }
 
   private onKey = (e: KeyboardEvent) => {
     if (session.state?.phase !== "playing") return;
@@ -403,17 +538,31 @@ export class Hud {
     if (k === "ESCAPE") {
       session.airMode = null;
       bus.emit("airMode", null);
+      bus.emit("cancelDrag");
       this.openBuildMenu(null);
+      if (session.selectedUnits.length) {
+        session.selectedUnits = [];
+        bus.emit("unitsSelected", []);
+      }
       return;
     }
-    if (k === "Q") return this.cycleRoute(-1);
-    if (k === "W") return this.cycleRoute(1);
     if (e.key === "Tab") {
       e.preventDefault();
-      return this.cycleRoute(e.shiftKey ? -1 : 1);
+      return this.cycleNode(e.shiftKey ? -1 : 1);
     }
-    const unit = UNIT_TYPES.find((t) => UNITS[t].hotkey === k);
-    if (unit) return this.deploy(unit, this.bottom.querySelector(`[data-unit="${unit}"]`));
+    if (k === "R") return this.retreat();
+    if (k === "E") {
+      session.enter = !session.enter;
+      return;
+    }
+    if (k === "A") return this.pickAll();
+    // 數字鍵：買兵（Shift + 數字 = 多選一支要派出的）
+    const code = /^Digit(\d)$/.exec(e.code)?.[1];
+    const unit = UNIT_TYPES.find((t) => UNITS[t].hotkey === (code ?? k));
+    if (unit) {
+      if (e.shiftKey) return this.pick(unit, 1, false);
+      return this.buy(unit, 1, this.bottom.querySelector(`[data-buy="${unit}"]`));
+    }
     const air = AIR_KINDS.find((a) => AIRCRAFT[a].hotkey === k);
     if (air) return this.armAir(air);
     const up = UPGRADE_KINDS.find((u) => UPGRADES[u].hotkey === k);
@@ -424,16 +573,6 @@ export class Hud {
     if (k === "M") toggleMute();
     if (k === "N") toggleMusic();
   };
-
-  private deploy(type: string, el: HTMLElement | null) {
-    const r = session.route;
-    if (!r) return;
-    session.send("spawn", { type, lane: r.lane, node: r.node });
-    el?.classList.remove("flash");
-    void el?.offsetWidth;
-    el?.classList.add("flash");
-    play("deploy", 0.7);
-  }
 
   private armAir(kind: AirKind) {
     session.airMode = session.airMode === kind ? null : kind;
@@ -542,13 +681,12 @@ export class Hud {
     const f = FACTIONS[m.faction];
     const name = this.map?.nodes[m.node]?.name ?? "堡壘";
     if (m.by === session.myId) {
-      this.showBanner("gold", `佔領 ${name}！`, "多一個出兵點，軍費收入增加");
+      this.showBanner("gold", `佔領 ${name}！`, "多一個出兵點，15 秒後開始產錢");
       play("capture", 1);
     } else {
       this.addFeed(`${f?.name ?? ""}佔領了${name}`, f?.light);
       play("capture", 0.35);
     }
-    this.renderRoute();
   }
 
   private onFortFallen(m: { node: number; owner: string; faction: number; by: string }) {
@@ -563,7 +701,22 @@ export class Hud {
     } else {
       this.addFeed(`${f?.name ?? ""}的${name}被攻破`, f?.light);
     }
-    this.renderRoute();
+  }
+
+  private onLeader(m: { id: string; faction: number }) {
+    const s = session.state;
+    if (!s || s.phase !== "playing" || s.time < 5) return;
+    if (!m.id) {
+      this.addFeed("懸賞解除：沒有人的堡壘比別人多", "#f2c14e");
+      return;
+    }
+    const p = s.players.get(m.id);
+    if (m.id === session.myId) {
+      this.showBanner("gold", "你被懸賞了！", "堡壘最多：攻破你的堡壘賞金加倍");
+      play("siren", 0.5);
+    } else if (p) {
+      this.addFeed(`懸賞 ${FACTIONS[p.faction].name}：攻破他的堡壘賞金加倍`, FACTIONS[p.faction].light);
+    }
   }
 
   // ================================================================ 結算
@@ -588,7 +741,7 @@ export class Hud {
     this.result.innerHTML = `<div class="result-box">
       <h2 class="${win ? "" : "lose"}">${title}</h2>
       <p class="reason">${esc(s.endReason)}</p>
-      <table><thead><tr><th>名次</th><th>陣營</th><th>指揮官</th><th>擊殺</th><th>佔領</th><th>出兵</th><th>花費</th></tr></thead><tbody>${rows}</tbody></table>
+      <table><thead><tr><th>名次</th><th>陣營</th><th>指揮官</th><th>擊殺</th><th>佔領</th><th>買兵</th><th>花費</th></tr></thead><tbody>${rows}</tbody></table>
       <div class="actions">
         ${isHost ? '<button class="btn primary" data-act="again">回到作戰室再戰</button>' : '<p style="margin:0;color:#a89f84">等房主開下一局…</p>'}
         <button class="btn" data-act="leave">離開房間</button>

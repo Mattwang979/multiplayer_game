@@ -14,9 +14,14 @@ import {
   nodeDir,
   nodeEnd,
   nodeLanes,
+  otherEnd,
+  planRoute,
+  routePoints,
   slotFits,
   type AirKind,
+  type Dest,
   type MapLayout,
+  type RouteStart,
   type Vec,
 } from "@frontline/shared";
 import { isMobile } from "../device";
@@ -38,7 +43,22 @@ const FORMATION: Record<string, [number, number][]> = {
   mg: [[-4, -6], [-7, 6]],
   at: [[-16, -9], [-18, 9]],
   artillery: [[-24, -11], [-26, 11]],
+  engineer: [[3, -6], [-4, 6]],
+  medic: [[3, -6], [-4, 6]],
 };
+const MAN_TEX: Record<string, string> = { engineer: "engineer", medic: "medic" };
+
+/** 拖曳派兵／調度中的狀態 */
+interface Drag {
+  kind: "dispatch" | "order";
+  node: number; // dispatch：從哪個據點
+  units: string[]; // order：哪些部隊
+  startX: number;
+  startY: number;
+  active: boolean; // 拖超過門檻才算拖曳（不然是點一下）
+  via: number[];
+  dest: Dest | null;
+}
 
 interface UnitView {
   c: Phaser.GameObjects.Container;
@@ -73,6 +93,7 @@ interface StructView {
 interface NodeView {
   img: Phaser.GameObjects.Image;
   label: Phaser.GameObjects.Text;
+  badge: Phaser.GameObjects.Text; // 自己據點的駐軍數
   key: string; // 目前的外觀（換主人時重畫）
   shots: number;
   airShots: number;
@@ -107,6 +128,9 @@ export class BattleScene extends Phaser.Scene {
   private markers: { img: Phaser.GameObjects.Image; until: number }[] = [];
   private wrecks: { img: Phaser.GameObjects.Image; until: number }[] = [];
   private crosshair!: Phaser.GameObjects.Image;
+  private preview!: Phaser.GameObjects.Graphics;
+  private previewText!: Phaser.GameObjects.Text;
+  private drag: Drag | null = null;
   private clock = 0;
   private unitScale = UNIT_SCALE_DESKTOP;
   private offs: (() => void)[] = [];
@@ -124,9 +148,24 @@ export class BattleScene extends Phaser.Scene {
     this.territory = this.add.graphics().setDepth(DEPTH.territory);
     this.bars = this.add.graphics().setDepth(DEPTH.bars);
     this.crosshair = this.add.image(0, 0, "target").setDepth(DEPTH.overlay).setVisible(false);
+    this.preview = this.add.graphics().setDepth(DEPTH.overlay);
+    this.previewText = this.add
+      .text(0, 0, "", {
+        fontFamily: '"Noto Sans TC", sans-serif',
+        fontSize: M() ? "26px" : "16px",
+        fontStyle: "900",
+        color: "#f2c14e",
+        stroke: "#1d1d17",
+        strokeThickness: M() ? 7 : 5,
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(DEPTH.overlay + 1)
+      .setVisible(false);
 
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => this.onPointerDown(p));
     this.input.on("pointermove", (p: Phaser.Input.Pointer) => this.onPointerMove(p));
+    this.input.on("pointerup", (p: Phaser.Input.Pointer) => this.onPointerUp(p));
+    this.input.on("pointerupoutside", (p: Phaser.Input.Pointer) => this.onPointerUp(p));
 
     this.offs.push(
       bus.on("bomb", (m: { lane: number; x: number }) => this.onBomb(m)),
@@ -137,6 +176,7 @@ export class BattleScene extends Phaser.Scene {
       bus.on("fortFallen", (m: { node: number }) => this.onFortFallen(m)),
       bus.on("paradrop", () => play("plane", 0.6)),
       bus.on("newBattle", () => (this.mapId = "")),
+      bus.on("cancelDrag", () => this.endDrag()),
     );
     this.events.once("shutdown", () => this.offs.forEach((f) => f()));
   }
@@ -165,7 +205,9 @@ export class BattleScene extends Phaser.Scene {
     this.nodes.forEach((n) => {
       n.img.destroy();
       n.label.destroy();
+      n.badge.destroy();
     });
+    this.endDrag();
     this.nodes = [];
     this.slots.forEach((s) => s.img.destroy());
     this.slots = [];
@@ -192,7 +234,19 @@ export class BattleScene extends Phaser.Scene {
         })
         .setOrigin(0.5)
         .setDepth(DEPTH.bars + 1);
-      this.nodes.push({ img, label, key: "", shots: 0, airShots: 0, hp: 0, wx: nd.x, wy: nd.y, big: !!nd.big || hq });
+      const badge = this.add
+        .text(nd.x + (hq ? 44 : 30) * (M() ? 1.2 : 1), nd.y - (hq ? 40 : 28) * (M() ? 1.2 : 1), "", {
+          fontFamily: '"Noto Sans TC", sans-serif',
+          fontSize: M() ? "22px" : "13px",
+          fontStyle: "900",
+          color: "#1b1405",
+          backgroundColor: "#f2c14e",
+          padding: { x: M() ? 6 : 4, y: 1 },
+        })
+        .setOrigin(0.5)
+        .setDepth(DEPTH.bars + 2)
+        .setVisible(false);
+      this.nodes.push({ img, label, badge, key: "", shots: 0, airShots: 0, hp: 0, wx: nd.x, wy: nd.y, big: !!nd.big || hq });
     });
   }
 
@@ -564,6 +618,10 @@ export class BattleScene extends Phaser.Scene {
 
   private syncNodes() {
     const s = session.state!;
+    const garrison = new Map<number, number>();
+    s.units.forEach((u) => {
+      if (u.inNode >= 0 && u.owner === session.myId) garrison.set(u.inNode, (garrison.get(u.inNode) ?? 0) + 1);
+    });
     this.nodes.forEach((v, i) => {
       const n = s.nodes[i] as NodeState | undefined;
       if (!n) return;
@@ -572,12 +630,15 @@ export class BattleScene extends Phaser.Scene {
       const owner = owned ? s.players.get(n.owner) : undefined;
       const tex = owned ? (n.kind === "hq" ? `hq${n.faction}` : `fort${n.faction}`) : "fortNeutral";
       const mine = owner?.id === session.myId;
-      const label =
+      let label =
         owned && n.kind === "hq" && owner
           ? M()
             ? mine ? "你的大本營" : owner.name
             : `${FACTIONS[owner.faction].name}・${owner.name}${mine ? "（你）" : ""}`
           : nd.name;
+      if (owned && n.kind === "hq" && owner && owner.id === s.leaderId) label = `懸賞・${label}`;
+      const grace = owned ? Math.ceil(n.incomeAt - s.time) : 0;
+      if (grace > 0) label += ` 整頓${grace}`;
       const key = `${tex}|${label}`;
       if (v.key !== key) {
         v.key = key;
@@ -599,6 +660,11 @@ export class BattleScene extends Phaser.Scene {
       }
       if (owned && n.hp < v.hp - 25) this.fx.impact(v.wx + rnd(-26, 26), v.wy + rnd(-26, 26), 1.1);
       v.hp = n.hp;
+      // 自己據點的駐軍人數
+      const count = owned && owner?.id === session.myId ? (garrison.get(i) ?? 0) : 0;
+      const badgeText = count > 0 ? `駐 ${count}` : "";
+      if (v.badge.text !== badgeText) v.badge.setText(badgeText);
+      v.badge.setVisible(count > 0);
     });
   }
 
@@ -636,7 +702,7 @@ export class BattleScene extends Phaser.Scene {
       if (u.type === "artillery") v.gun = this.add.image(2, 0, `howitzer${f}`);
       if (v.gun) c.add(v.gun);
       for (const [x, y] of FORMATION[u.type] ?? FORMATION.rifle) {
-        const m = this.add.image(x, y, `soldier${f}`);
+        const m = this.add.image(x, y, `${MAN_TEX[u.type] ?? "soldier"}${f}`);
         men.push(m);
         c.add(m);
       }
@@ -649,11 +715,19 @@ export class BattleScene extends Phaser.Scene {
     const s = session.state!;
     const seen = new Set<string>();
     s.units.forEach((u) => {
+      if (u.inNode >= 0) return; // 駐紮在據點裡：看不到
       seen.add(u.id);
       let v = this.units.get(u.id);
       if (!v) {
         v = this.makeUnit(u);
         this.units.set(u.id, v);
+        if (u.landT <= s.time) {
+          const lane = this.map.lanes[u.lane];
+          if (lane) {
+            const p = lanePoint(lane, u.x);
+            this.fx.dustRing(p.x, p.y, 0.45);
+          }
+        }
       }
       if (v.lane !== u.lane || Math.abs(v.x - u.x) > 60) {
         v.lane = u.lane;
@@ -707,7 +781,7 @@ export class BattleScene extends Phaser.Scene {
     });
     for (const [id, v] of this.units) {
       if (seen.has(id)) continue;
-      this.unitDied(v);
+      if (!s.units.get(id)) this.unitDied(v); // 還在、只是進駐了就不放陣亡特效
       v.c.destroy();
       v.shadow.destroy();
       v.chute?.destroy();
@@ -723,6 +797,25 @@ export class BattleScene extends Phaser.Scene {
     const my = v.wy + Math.sin(v.angle) * 14;
     const vol = this.volumeAt(v.wx, v.wy);
     switch (u.type) {
+      case "medic": {
+        const tp0 = laneOffsetPoint(lane, u.tx, rnd(-8, 8));
+        for (let k = 0; k < 3; k++) {
+          this.fx.spawn("healplus", tp0.x + rnd(-10, 10), tp0.y + rnd(-6, 6), {
+            life: 0.9, s0: 0.9, s1: 1.2, a0: 1, a1: 0, rise: 26, depth: DEPTH.overlay,
+          });
+        }
+        break;
+      }
+      case "engineer":
+        if (u.attacking) {
+          // 爆破
+          this.fx.explosion(tp.x, tp.y, 0.7);
+          play("boom", vol * 0.55);
+        } else {
+          this.fx.spawn("wrench", tp.x + rnd(-8, 8), tp.y + rnd(-8, 8), { life: 0.7, s0: 1, s1: 1.2, a0: 1, a1: 0, rise: 18, vr: 4, depth: DEPTH.overlay });
+          for (let k = 0; k < 4; k++) this.fx.spawn("spark", tp.x, tp.y, { life: 0.3, s0: 1, s1: 0.4, vx: rnd(-60, 60), vy: rnd(-60, 20), tint: 0xffd34a, depth: DEPTH.overlay });
+        }
+        break;
       case "rifle":
       case "para":
         this.fx.muzzle(mx, my, v.angle, 0.6);
@@ -1058,7 +1151,6 @@ export class BattleScene extends Phaser.Scene {
     const s = session.state!;
     const g = this.territory;
     g.clear();
-    const route = session.route;
     this.map.lanes.forEach((lane, li) => {
       const front = s.fronts[li] ?? lane.len / 2;
       const seg = (from: number, to: number, off = 0) => {
@@ -1067,10 +1159,6 @@ export class BattleScene extends Phaser.Scene {
         for (let i = 0; i <= steps; i++) pts.push(laneOffsetPoint(lane, from + ((to - from) * i) / steps, off));
         return pts as unknown as Phaser.Math.Vector2[];
       };
-      if (route && route.lane === li) {
-        g.lineStyle(58, 0xf2c14e, 0.35);
-        g.strokePoints(seg(0, lane.len));
-      }
       const paint = (faction: number, from: number, to: number) => {
         if (Math.abs(to - from) < 4) return;
         const col = FACTIONS[faction].color;
@@ -1087,8 +1175,8 @@ export class BattleScene extends Phaser.Scene {
       const pb = session.ownerOf(lane.b);
       if (pa) paint(pa.faction, 0, front);
       if (pb) paint(pb.faction, front, lane.len);
-      // 交戰位置
-      if (pa || pb) {
+      // 交戰位置（兩端是不同主人時才畫）
+      if ((pa || pb) && pa?.id !== pb?.id) {
         const fp = lanePoint(lane, front);
         const nx = -Math.sin(fp.angle);
         const ny = Math.cos(fp.angle);
@@ -1098,32 +1186,72 @@ export class BattleScene extends Phaser.Scene {
         g.lineStyle(4, 0xffe14d, pulse);
         g.lineBetween(fp.x - nx * 28, fp.y - ny * 28, fp.x + nx * 28, fp.y + ny * 28);
       }
-      // 選到的出兵路線：從據點往外流動的箭頭
-      if (route && route.lane === li) {
-        const dir = nodeDir(lane, route.node);
-        const start = nodeEnd(lane, route.node);
-        const span = Math.max(90, lane.len - 80);
-        for (let k = 0; k < 10; k++) {
-          const along = ((this.clock * 70 + k * 90) % span) + 40;
-          if (along > lane.len - 40) continue;
-          const p = lanePoint(lane, start + dir * along);
-          const a = p.angle + (dir < 0 ? Math.PI : 0);
-          const pts = [
-            { x: p.x + Math.cos(a + 2.5) * 10, y: p.y + Math.sin(a + 2.5) * 10 },
-            { x: p.x + Math.cos(a) * 8, y: p.y + Math.sin(a) * 8 },
-            { x: p.x + Math.cos(a - 2.5) * 10, y: p.y + Math.sin(a - 2.5) * 10 },
-          ] as unknown as Phaser.Math.Vector2[];
-          g.lineStyle(6, 0x1d1d17, 0.6);
-          g.strokePoints(pts);
-          g.lineStyle(3.5, 0xf2c14e, 0.95);
-          g.strokePoints(pts);
-        }
-        // 出兵據點外圈
-        const nd = this.map.nodes[route.node];
-        g.lineStyle(5, 0xf2c14e, 0.6 + Math.sin(this.clock * 5) * 0.3);
-        g.strokeCircle(nd.x, nd.y, nd.kind === "hq" ? (M() ? 78 : 66) : M() ? 54 : 46);
-      }
     });
+
+    // 選到的據點：金色外圈
+    const sel = session.selectedNode;
+    if (sel >= 0 && session.ownsNode(sel)) {
+      const nd = this.map.nodes[sel];
+      g.lineStyle(5, 0xf2c14e, 0.6 + Math.sin(this.clock * 5) * 0.3);
+      g.strokeCircle(nd.x, nd.y, nd.kind === "hq" ? (M() ? 78 : 66) : M() ? 54 : 46);
+    }
+
+    // 選到的部隊：腳下金圈＋目前要走的路
+    const chosen = session.selectedUnits;
+    if (chosen.length) {
+      const pathsDrawn = new Set<string>();
+      for (const id of chosen) {
+        const v = this.units.get(id);
+        const u = s.units.get(id);
+        if (!v || !u) continue;
+        g.lineStyle(3, 0xf2c14e, 0.95);
+        g.strokeCircle(v.wx, v.wy, (u.type === "tank" ? 24 : 18) * (this.unitScale / UNIT_SCALE_DESKTOP));
+        const key = `${u.destNode}|${u.destLane}|${Math.round(u.destX)}|${u.mode}`;
+        if (pathsDrawn.has(key) || u.mode === "hold") continue;
+        pathsDrawn.add(key);
+        const pts = this.unitPath(u);
+        if (pts.length > 1) {
+          const color = u.mode === "retreat" ? 0xffffff : 0xf2c14e;
+          g.lineStyle(7, 0x1d1d17, 0.45);
+          g.strokePoints(pts as unknown as Phaser.Math.Vector2[]);
+          g.lineStyle(3, color, 0.85);
+          g.strokePoints(pts as unknown as Phaser.Math.Vector2[]);
+          const end = pts[pts.length - 1];
+          g.fillStyle(color, 0.9);
+          g.fillCircle(end.x, end.y, 7);
+        }
+      }
+    }
+  }
+
+  /** 一支部隊接下來要走的路（照伺服器同步的 route 畫） */
+  private unitPath(u: UnitState): Vec[] {
+    const pts: Vec[] = [];
+    const walk = (li: number, from: number, to: number) => {
+      const lane = this.map.lanes[li];
+      if (!lane) return;
+      const n = Math.max(1, Math.ceil(Math.abs(to - from) / 18));
+      for (let i = 0; i <= n; i++) pts.push(lanePoint(lane, from + ((to - from) * i) / n));
+    };
+    const lane = this.map.lanes[u.lane];
+    if (!lane) return pts;
+    const route: number[] = [];
+    for (let i = 0; i < u.route.length; i++) route.push(u.route[i]);
+    if (route.length === 0 && u.destNode < 0 && u.destLane === u.lane) {
+      walk(u.lane, u.x, u.destX);
+      return pts;
+    }
+    walk(u.lane, u.x, u.dir > 0 ? lane.len : 0);
+    let node = u.dir > 0 ? lane.b : lane.a;
+    route.forEach((li, i) => {
+      const L = this.map.lanes[li];
+      if (!L) return;
+      const from = nodeEnd(L, node);
+      const last = i === route.length - 1;
+      walk(li, from, last && u.destNode < 0 && u.destLane === li ? u.destX : L.len - from);
+      node = otherEnd(L, node);
+    });
+    return pts;
   }
 
   private drawBars() {
@@ -1219,22 +1347,71 @@ export class BattleScene extends Phaser.Scene {
 
   // ---------------------------------------------------------------- 輸入
 
-  private onPointerMove(p: Phaser.Input.Pointer) {
-    if (!session.airMode || !this.map) {
-      this.crosshair.setVisible(false);
-      return;
+  // 點擊／拖曳：
+  // - 點自己的據點 = 選這個據點（右邊面板買兵、選數量）；從據點拖出去 = 派兵，放開的地方是目的地
+  // - 點自己的部隊 = 選整隊；拖曳部隊 = 改目的地；選著部隊時點地圖 = 直接派去那裡
+  // - 拖曳途中經過的據點會變成必經點
+  private hitNode(wx: number, wy: number) {
+    let best = -1;
+    let bestD = Infinity;
+    this.map.nodes.forEach((nd, i) => {
+      const r = (nd.kind === "hq" ? 62 : 44) * (M() ? 1.25 : 1);
+      const d = Math.hypot(wx - nd.x, wy - nd.y);
+      if (d <= r && d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    });
+    return best;
+  }
+
+  private hitOwnUnit(wx: number, wy: number): UnitState | undefined {
+    const s = session.state!;
+    let best: UnitState | undefined;
+    let bestD = (M() ? 30 : 20) * (this.unitScale / UNIT_SCALE_DESKTOP);
+    this.units.forEach((v, id) => {
+      const u = s.units.get(id);
+      if (!u || u.owner !== session.myId || u.inNode >= 0 || u.landT > s.time) return;
+      const d = Math.hypot(wx - v.wx, wy - v.wy);
+      if (d < bestD) {
+        bestD = d;
+        best = u;
+      }
+    });
+    return best;
+  }
+
+  /** 選一整隊（同一個編號的部隊） */
+  private selectGroup(u: UnitState) {
+    const s = session.state!;
+    const ids: string[] = [];
+    if (u.group) {
+      s.units.forEach((o) => {
+        if (o.owner === session.myId && o.group === u.group && o.inNode < 0) ids.push(o.id);
+      });
     }
-    const hit = nearestLanePos(this.map, p.worldX, p.worldY);
-    const pos = lanePoint(this.map.lanes[hit.lane], hit.x);
-    this.crosshair.setVisible(true).setPosition(pos.x, pos.y).setScale(session.airMode === "bomber" ? 1.2 : 0.9).setRotation(this.clock);
+    session.selectedUnits = ids.length ? ids : [u.id];
+    bus.emit("unitsSelected", session.selectedUnits);
+    play("click", 0.6);
+  }
+
+  private destAt(wx: number, wy: number): Dest | null {
+    const node = this.hitNode(wx, wy);
+    if (node >= 0) return { node };
+    const hit = nearestLanePos(this.map, wx, wy);
+    if (hit.dist > (M() ? 110 : 70)) return null;
+    return { lane: hit.lane, x: hit.x };
   }
 
   private onPointerDown(p: Phaser.Input.Pointer) {
     if (!this.map || session.state?.phase !== "playing") return;
+    const me = session.me();
+    if (!me?.alive) return;
     if (p.rightButtonDown()) {
       session.airMode = null;
       bus.emit("airMode", null);
       this.crosshair.setVisible(false);
+      this.clearUnitSelection();
       return;
     }
     if (session.airMode) {
@@ -1249,7 +1426,21 @@ export class BattleScene extends Phaser.Scene {
       this.crosshair.setVisible(false);
       return;
     }
-    // 點到空的工事位：開建造選單（選單位置換算成螢幕座標）
+    bus.emit("buildMenu", null);
+    // 自己的部隊（優先，才能點到守在據點門口的兵）
+    const unit = this.hitOwnUnit(p.worldX, p.worldY);
+    if (unit) {
+      if (!session.selectedUnits.includes(unit.id)) this.selectGroup(unit);
+      this.drag = { kind: "order", node: -1, units: [...session.selectedUnits], startX: p.x, startY: p.y, active: false, via: [], dest: null };
+      return;
+    }
+    // 自己的據點：準備拖曳派兵
+    const node = this.hitNode(p.worldX, p.worldY);
+    if (node >= 0 && session.ownsNode(node)) {
+      this.drag = { kind: "dispatch", node, units: [], startX: p.x, startY: p.y, active: false, via: [], dest: null };
+      return;
+    }
+    // 空的工事位
     const rect = this.game.canvas.getBoundingClientRect();
     const sx = rect.left + (p.x / this.scale.width) * rect.width;
     const sy = rect.top + (p.y / this.scale.height) * rect.height;
@@ -1260,34 +1451,173 @@ export class BattleScene extends Phaser.Scene {
         return;
       }
     }
-    bus.emit("buildMenu", null);
-    // 點自己的據點：輪流切換這個據點出去的道路
-    for (let i = 0; i < this.map.nodes.length; i++) {
-      const nd = this.map.nodes[i];
-      const r = (nd.kind === "hq" ? 60 : 40) * (M() ? 1.3 : 1);
-      if (Math.hypot(p.worldX - nd.x, p.worldY - nd.y) > r) continue;
-      if (!session.ownsNode(i)) break;
-      const lanes = nodeLanes(this.map, i);
-      const cur = session.route?.node === i ? lanes.indexOf(session.route.lane) : -1;
-      session.route = { node: i, lane: lanes[(cur + 1) % lanes.length] };
-      bus.emit("routeChanged", session.route);
-      play("click", 0.6);
+    // 選著部隊時點地圖：派去那裡
+    if (session.selectedUnits.length) {
+      const dest = this.destAt(p.worldX, p.worldY);
+      if (dest) this.sendOrder(session.selectedUnits, [], dest);
+      else this.clearUnitSelection();
+    }
+  }
+
+  private onPointerMove(p: Phaser.Input.Pointer) {
+    if (!this.map) return;
+    if (session.airMode) {
+      const hit = nearestLanePos(this.map, p.worldX, p.worldY);
+      const pos = lanePoint(this.map.lanes[hit.lane], hit.x);
+      this.crosshair.setVisible(true).setPosition(pos.x, pos.y).setScale(session.airMode === "bomber" ? 1.2 : 0.9).setRotation(this.clock);
       return;
     }
-    // 點道路：選這條路當出兵路線，從路上離點擊處較近的自己據點出發
-    const hit = nearestLanePos(this.map, p.worldX, p.worldY);
-    if (hit.dist > (M() ? 110 : 70)) return;
-    const lane = this.map.lanes[hit.lane];
-    const ownA = session.ownsNode(lane.a);
-    const ownB = session.ownsNode(lane.b);
-    if (!ownA && !ownB) {
-      bus.emit("toast", "這條路沒有連到你的據點");
+    this.crosshair.setVisible(false);
+    const d = this.drag;
+    if (!d || !p.isDown) return;
+    if (!d.active) {
+      if (Math.hypot(p.x - d.startX, p.y - d.startY) < (M() ? 18 : 12)) return;
+      d.active = true;
+      bus.emit("buildMenu", null);
+    }
+    // 經過的據點變成必經點（出發點和最後一個必經點不重複加）
+    const over = this.hitNode(p.worldX, p.worldY);
+    if (over >= 0 && over !== d.node && d.via[d.via.length - 1] !== over) d.via.push(over);
+    d.dest = this.destAt(p.worldX, p.worldY);
+    this.drawPreview(p.worldX, p.worldY);
+  }
+
+  private onPointerUp(p: Phaser.Input.Pointer) {
+    const d = this.drag;
+    this.drag = null;
+    this.preview.clear();
+    this.previewText.setVisible(false);
+    if (!d || !this.map || session.state?.phase !== "playing") return;
+    if (!d.active) {
+      // 只是點一下
+      if (d.kind === "dispatch") {
+        if (session.selectedUnits.length) this.sendOrder(session.selectedUnits, [], { node: d.node });
+        else this.selectNode(d.node);
+      }
       return;
     }
-    const node = ownA && ownB ? (hit.x < lane.len / 2 ? lane.a : lane.b) : ownA ? lane.a : lane.b;
-    session.route = { node, lane: hit.lane };
-    bus.emit("routeChanged", session.route);
-    play("click", 0.6);
+    const dest = d.dest ?? this.destAt(p.worldX, p.worldY);
+    if (!dest) {
+      bus.emit("toast", "放在道路或據點上才能派兵");
+      return;
+    }
+    // 放開的地方如果就是最後一個必經點，就不算必經點
+    const via = d.via.filter((v, i) => !(i === d.via.length - 1 && "node" in dest && dest.node === v));
+    if (d.kind === "dispatch") {
+      if ("node" in dest && dest.node === d.node) return;
+      this.selectNode(d.node, false);
+      const counts = session.picks.slice();
+      session.send("dispatch", { node: d.node, counts, via, dest, enter: session.enter });
+      session.clearPicks();
+      bus.emit("picksChanged");
+      play("deploy", 0.8);
+    } else {
+      this.sendOrder(d.units, via, dest);
+    }
+  }
+
+  private sendOrder(units: string[], via: number[], dest: Dest) {
+    session.send("order", { units, via, dest, enter: session.enter });
+    play("deploy", 0.6);
+    const pos = "node" in dest ? this.map.nodes[dest.node] : lanePoint(this.map.lanes[dest.lane], dest.x);
+    this.fx.spawn("ring", pos.x, pos.y, { life: 0.45, s0: 0.15, s1: 0.5, a0: 1, a1: 0, tint: 0xf2c14e, depth: DEPTH.overlay });
+  }
+
+  private selectNode(node: number, sound = true) {
+    if (session.selectedNode !== node) {
+      session.selectedNode = node;
+      session.clearPicks();
+    }
+    bus.emit("nodeSelected", node);
+    if (sound) play("click", 0.6);
+  }
+
+  private clearUnitSelection() {
+    if (!session.selectedUnits.length) return;
+    session.selectedUnits = [];
+    bus.emit("unitsSelected", []);
+  }
+
+  private endDrag() {
+    this.drag = null;
+    this.preview?.clear();
+    this.previewText?.setVisible(false);
+  }
+
+  /** 拖曳中的路線預覽 */
+  private drawPreview(wx: number, wy: number) {
+    const d = this.drag;
+    const g = this.preview;
+    g.clear();
+    if (!d) return;
+    const s = session.state!;
+    let start: RouteStart | null = null;
+    if (d.kind === "dispatch") start = { node: d.node };
+    else {
+      const u = s.units.get(d.units[0]);
+      if (u && u.inNode < 0) start = { lane: u.lane, x: u.x };
+    }
+    // 必經點
+    d.via.forEach((v, i) => {
+      const nd = this.map.nodes[v];
+      g.lineStyle(4, 0x1d1d17, 0.8);
+      g.strokeCircle(nd.x, nd.y, 22);
+      g.lineStyle(3, 0xf2c14e, 1);
+      g.strokeCircle(nd.x, nd.y, 22);
+      g.fillStyle(0xf2c14e, 1);
+      g.fillCircle(nd.x + 18, nd.y - 18, 9);
+      void i;
+    });
+    const dest = d.dest;
+    if (!start || !dest) {
+      g.lineStyle(3, 0xff5a3c, 0.8);
+      g.strokeCircle(wx, wy, 14);
+      this.previewText.setVisible(true).setPosition(wx, wy - 22).setText("放在道路或據點上").setColor("#ff9a5c");
+      return;
+    }
+    const plan = planRoute(this.map, start, d.via, dest);
+    if (!plan) {
+      this.previewText.setVisible(true).setPosition(wx, wy - 22).setText("走不到這裡").setColor("#ff9a5c");
+      return;
+    }
+    const pts = routePoints(this.map, start, plan, dest);
+    if (pts.length > 1) {
+      const line = pts as unknown as Phaser.Math.Vector2[];
+      g.lineStyle(12, 0x1d1d17, 0.55);
+      g.strokePoints(line);
+      g.lineStyle(6, 0xf2c14e, 0.95);
+      g.strokePoints(line);
+      // 流動的箭頭
+      for (let k = 0; k < pts.length - 1; k += 4) {
+        const a = pts[k];
+        const b = pts[k + 1];
+        const ang = Math.atan2(b.y - a.y, b.x - a.x);
+        g.fillStyle(0x1d1d17, 0.9);
+        g.fillTriangle(
+          a.x + Math.cos(ang) * 7, a.y + Math.sin(ang) * 7,
+          a.x + Math.cos(ang + 2.4) * 6, a.y + Math.sin(ang + 2.4) * 6,
+          a.x + Math.cos(ang - 2.4) * 6, a.y + Math.sin(ang - 2.4) * 6,
+        );
+      }
+    }
+    const end = "node" in dest ? this.map.nodes[dest.node] : lanePoint(this.map.lanes[dest.lane], dest.x);
+    g.lineStyle(5, 0x1d1d17, 0.9);
+    g.strokeCircle(end.x, end.y, "node" in dest ? 40 : 16);
+    g.lineStyle(3, 0xf2c14e, 1);
+    g.strokeCircle(end.x, end.y, "node" in dest ? 40 : 16);
+    // 說明文字
+    let text: string;
+    if ("node" in dest) {
+      const owner = session.ownerOf(dest.node);
+      const name = this.map.nodes[dest.node].name;
+      if (owner?.id === session.myId) text = session.enter ? `進駐 ${name}` : `守在 ${name}`;
+      else text = `${owner ? "進攻" : "佔領"} ${name}${session.enter ? "（佔下後進駐）" : ""}`;
+    } else text = "在這裡駐守";
+    if (d.kind === "dispatch") {
+      const total = session.picks.reduce((a, b) => a + b, 0);
+      text = `${total > 0 ? `派 ${total} 支` : "全部派出"}・${text}`;
+    } else text = `${d.units.length} 支・${text}`;
+    this.previewText.setVisible(true).setPosition(end.x, end.y - ("node" in dest ? 46 : 22)).setText(text).setColor("#f2c14e");
   }
 
   private volumeAt(x: number, y: number) {

@@ -199,6 +199,64 @@ function soldier(ctx: Ctx, f: Faction) {
   ctx.fill();
 }
 
+/** 工兵：背著炸藥包（黃色）、手上拿工具，沒有步槍 */
+function engineerMan(ctx: Ctx, f: Faction) {
+  ctx.translate(9, 9);
+  ctx.strokeStyle = OUT;
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#5a4e36";
+  ctx.beginPath();
+  ctx.ellipse(-1, 0, 4.5, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  // 炸藥包
+  ctx.fillStyle = "#e0a530";
+  ctx.fillRect(-7.5, -3.5, 4, 7);
+  ctx.strokeRect(-7.5, -3.5, 4, 7);
+  // 工具
+  ctx.strokeStyle = "#b9b4a6";
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(1, -4);
+  ctx.lineTo(8, -4);
+  ctx.stroke();
+  ctx.fillStyle = "#b9b4a6";
+  ctx.fillRect(7, -6, 2.5, 4);
+  ctx.strokeStyle = OUT;
+  ctx.fillStyle = f.css;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.arc(0, 0, 4.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#e0a530";
+  ctx.fillRect(-1, -4.4, 2, 8.8);
+}
+
+/** 醫療兵：白色鋼盔上有紅十字，背著醫療包 */
+function medicMan(ctx: Ctx, f: Faction) {
+  ctx.translate(9, 9);
+  ctx.strokeStyle = OUT;
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#5a4e36";
+  ctx.beginPath();
+  ctx.ellipse(-1, 0, 4.5, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = f.css;
+  ctx.fillRect(-7.5, -3, 4, 6);
+  ctx.strokeRect(-7.5, -3, 4, 6);
+  ctx.fillStyle = "#f4f1e6";
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.arc(0, 0, 4.6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#d8322a";
+  ctx.fillRect(-0.9, -3, 1.8, 6);
+  ctx.fillRect(-3, -0.9, 6, 1.8);
+}
+
 function tankHull(ctx: Ctx, f: Faction) {
   ctx.translate(28, 19);
   // 履帶
@@ -530,6 +588,8 @@ function radial(ctx: Ctx, size: number, stops: [number, string][]) {
 export function makeTextures(scene: Phaser.Scene) {
   FACTIONS.forEach((f, i) => {
     canvasTex(scene, `soldier${i}`, 18, 18, (c) => soldier(c, f));
+    canvasTex(scene, `engineer${i}`, 18, 18, (c) => engineerMan(c, f));
+    canvasTex(scene, `medic${i}`, 18, 18, (c) => medicMan(c, f));
     canvasTex(scene, `tank${i}`, 56, 38, (c) => tankHull(c, f));
     canvasTex(scene, `turret${i}`, 48, 22, (c) => tankTurret(c, f));
     canvasTex(scene, `atgun${i}`, 46, 28, (c) => atGun(c, f));
@@ -543,6 +603,28 @@ export function makeTextures(scene: Phaser.Scene) {
     canvasTex(scene, `transport${i}`, 100, 96, (c) => drawPlane(c, TRANSPORT, f, 1));
   });
   canvasTex(scene, "fortNeutral", 80, 80, (c) => fort(c, null));
+  canvasTex(scene, "healplus", 18, 18, (c) => {
+    const p = new Path2D();
+    p.rect(6.5, 2, 5, 14);
+    p.rect(2, 6.5, 14, 5);
+    c.fillStyle = "#1d1d17";
+    c.fillRect(5.5, 1, 7, 16);
+    c.fillRect(1, 5.5, 16, 7);
+    c.fillStyle = "#6fe07a";
+    c.fill(p);
+  });
+  canvasTex(scene, "wrench", 18, 18, (c) => {
+    c.translate(9, 9);
+    c.rotate(-Math.PI / 4);
+    c.fillStyle = "#1d1d17";
+    c.fillRect(-2.5, -7, 5, 14);
+    c.fillStyle = "#ffd34a";
+    c.fillRect(-1.5, -6, 3, 12);
+    c.beginPath();
+    c.arc(0, -6, 3.5, 0, Math.PI * 2);
+    c.fill();
+    c.stroke();
+  });
   canvasTex(scene, "mggun", 28, 14, mgGun);
   canvasTex(scene, "aagun", 30, 24, aaGun);
   canvasTex(scene, "chute", 56, 56, chute);
