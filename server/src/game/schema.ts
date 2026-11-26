@@ -9,6 +9,7 @@ export const Player = schema(
     faction: t.uint8().default(0), // 陣營顏色（FACTIONS 的索引）
     hq: t.int8().default(-1), // 自己大本營是哪個據點
     isBot: t.boolean().default(false),
+    botLevel: t.string().default("normal"), // 電腦難度：easy / normal / hard / brutal
     connected: t.boolean().default(true),
     alive: t.boolean().default(true),
     rank: t.uint8().default(0), // 名次（出局時決定，贏家 = 1）

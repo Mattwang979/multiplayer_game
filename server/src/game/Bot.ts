@@ -1,11 +1,16 @@
 // 電腦玩家：每隔一段時間看一下戰況，用跟真人一樣的指令買兵、派兵、調度、蓋工事、升級、叫空軍。
-// 也用來代管斷線的玩家。
+// 也用來代管斷線的玩家（固定用普通難度）。
+// 難度不改規則，只改「腦袋」：反應速度、會用的兵種與手段、會不會看對手出兵來剋制；
+// 只有地獄難度另外在 Battle 裡多 30% 收入。
 import {
   AIRCRAFT,
   AIR_KINDS,
   BOMB,
   BUILD_SLOTS,
   FORT_SPEC_DEFS,
+  GARRISON_FIRE_BONUS,
+  GARRISON_FIRE_MAX,
+  POP_CAP,
   MAX_UPGRADE_LEVEL,
   UNIT_TYPES,
   STRUCTURES,
@@ -18,12 +23,60 @@ import {
   roadDistance,
   upkeepFor,
   type AirKind,
+  type BotLevel,
   type BuildKind,
   type FortSpec,
   type UnitType,
 } from "@frontline/shared";
 import type { Battle } from "./Battle";
 import type { Player, Unit } from "./schema";
+
+/** 各難度的打法設定 */
+export interface Profile {
+  think: [number, number]; // 每隔幾秒想一次（越短反應越快）
+  units: UnitType[] | null; // 會出的兵種（null = 全部）
+  counter: number; // 看對手兵種出剋制兵種的機率
+  air: number; // 每次想事情時考慮叫空軍的機率
+  upgrade: number;
+  build: number;
+  convert: number;
+  crates: boolean; // 會不會去搶補給箱
+  defend: boolean; // 據點被打會不會把駐軍派出來迎戰
+  retreat: number; // 殘兵撤退的機率（0 = 不撤退）
+  retreatAt: number; // 平均血量低於多少就撤退
+  attackNeed: number; // 集結多少人口才出擊（加在基本值上）
+  reserve: number; // 買兵時留多少錢
+  focus: boolean; // 會不會優先打懸賞中、血少的目標
+  plan: number; // >0：估算目標的防禦，自己兵力到這個倍數才出擊（0 = 只看人數）
+  consolidate: boolean; // 把後方據點的兵集中到前線集結點
+}
+
+export const PROFILES: Record<BotLevel, Profile> = {
+  // 簡單：反應慢、兵一買好就零零星星派出去、據點被打會衝出去送、不會存錢
+  easy: {
+    think: [2.2, 3.4], units: ["rifle", "mg", "at", "tank", "artillery"], counter: 0, air: 0, upgrade: 0, build: 0.06, convert: 0,
+    crates: false, defend: true, retreat: 0, retreatAt: 0, attackNeed: -2, reserve: 20, focus: false,
+    plan: 0, consolidate: false,
+  },
+  // 普通：會蓋工事、升級、叫空軍；兵種較單純，集滿人數就出擊
+  normal: {
+    think: [0.7, 1.6], units: ["rifle", "mg", "at", "tank", "artillery", "medic", "engineer", "flak"],
+    counter: 0.35, air: 0.5, upgrade: 0.2, build: 0.3, convert: 0.15,
+    crates: true, defend: false, retreat: 0.5, retreatAt: 0.3, attackNeed: 0, reserve: 100, focus: true,
+    plan: 0, consolidate: false,
+  },
+  // 困難：守在堡壘裡等對手撞牆、存一筆錢在被打的據點即時補兵、集中兵力算好再打、看你出什麼就剋制
+  hard: {
+    think: [0.4, 0.8], units: ["rifle", "mg", "at", "tank", "artillery", "medic", "engineer", "flak"], counter: 0.6, air: 0.7, upgrade: 0.3, build: 0.4, convert: 0.25,
+    crates: true, defend: false, retreat: 0.9, retreatAt: 0.4, attackNeed: 0, reserve: 150, focus: true,
+    plan: 1.4, consolidate: true,
+  },
+  brutal: {
+    think: [0.35, 0.7], units: ["rifle", "mg", "at", "tank", "artillery", "medic", "engineer", "flak"], counter: 0.6, air: 0.8, upgrade: 0.35, build: 0.45, convert: 0.3,
+    crates: true, defend: false, retreat: 0.9, retreatAt: 0.4, attackNeed: 0, reserve: 150, focus: true,
+    plan: 1.4, consolidate: true,
+  },
+};
 
 interface Threat {
   node: number;
@@ -41,11 +94,15 @@ export class BotBrain {
   private targetUntil = 0;
   private nextRegroup = 8;
   private chasedCrates = new Set<string>();
+  private prof: Profile;
 
   constructor(
     public playerId: string,
     private rng: () => number = Math.random,
+    level: BotLevel | Profile = "normal",
   ) {
+    // 傳入 Profile 物件是給平衡測試用的
+    this.prof = typeof level === "string" ? (PROFILES[level] ?? PROFILES.normal) : level;
     this.nextThink = 0.5 + rng() * 1.5;
   }
 
@@ -54,7 +111,8 @@ export class BotBrain {
     if (s.phase !== "playing") return;
     this.nextThink -= dt;
     if (this.nextThink > 0) return;
-    this.nextThink = 0.7 + this.rng() * 0.9;
+    const [lo, hi] = this.prof.think;
+    this.nextThink = lo + this.rng() * (hi - lo);
 
     const p = s.players.get(this.playerId);
     if (!p || !p.alive) return;
@@ -64,16 +122,17 @@ export class BotBrain {
     const owned = battle.ownedNodes(p.id);
     if (owned.length === 0) return;
 
+    const pr = this.prof;
     const threats = this.scout(battle, p, owned);
     this.pickTarget(battle, p, owned);
-    if (this.rng() < 0.5) this.tryAir(battle, p);
-    if (s.time > 40 && this.rng() < 0.2) this.tryUpgrade(battle, p);
-    if (this.rng() < 0.3) this.tryBuild(battle, p, threats);
-    this.defend(battle, p, threats);
+    if (this.rng() < pr.air) this.tryAir(battle, p);
+    if (s.time > 40 && this.rng() < pr.upgrade) this.tryUpgrade(battle, p);
+    if (this.rng() < pr.build) this.tryBuild(battle, p, threats);
+    if (pr.defend) this.defend(battle, p, threats);
     this.buy(battle, p, owned, threats);
     this.attack(battle, p, owned);
-    this.chaseCrates(battle, p);
-    if (this.rng() < 0.15) this.tryConvert(battle, p, owned);
+    if (pr.crates) this.chaseCrates(battle, p);
+    if (this.rng() < pr.convert) this.tryConvert(battle, p, owned);
     if (s.time >= this.nextRegroup) {
       this.nextRegroup = s.time + 5 + this.rng() * 4;
       this.regroup(battle, p);
@@ -121,9 +180,9 @@ export class BotBrain {
       let score = d;
       const enemy = !!n.owner && n.hp > 0;
       if (enemy) {
-        score += 220 + (n.hp / n.maxHp) * 350;
+        score += 220 + (this.prof.focus ? (n.hp / n.maxHp) * 350 : 175);
         if (n.kind === "hq") score += 250;
-        if (n.owner === s.leaderId) score -= 280;
+        if (this.prof.focus && n.owner === s.leaderId) score -= 280;
       } else {
         score -= s.time < 120 ? 200 : 60;
       }
@@ -152,26 +211,82 @@ export class BotBrain {
     return best;
   }
 
+  /** 自己的兵力組成（野外＋駐軍） */
+  private myComp(battle: Battle) {
+    const counts = new Map<UnitType, number>();
+    let combat = 0; // 不含工兵、醫療兵
+    let infantry = 0; // 會被醫療兵治療的戰鬥步兵
+    battle.state.units.forEach((u) => {
+      if (u.owner !== this.playerId || u.hp <= 0) return;
+      const type = u.type as UnitType;
+      counts.set(type, (counts.get(type) ?? 0) + 1);
+      if (type === "medic" || type === "engineer") return;
+      combat += 1;
+      if (UNITS[type].armor === "soft") infantry += 1;
+    });
+    return { counts, combat, infantry };
+  }
+
   private chooseUnit(battle: Battle, threat: Threat | undefined): UnitType {
     const s = battle.state;
+    const pr = this.prof;
+    const allowed = (t: UnitType) => !pr.units || pr.units.includes(t);
+    const pick = (t: UnitType, fallback: UnitType = "rifle") => (allowed(t) ? t : fallback);
     if (threat && threat.hard >= 200 && this.rng() < 0.7) return "at";
-    if (threat && threat.soft >= 250 && this.rng() < 0.4) return this.rng() < 0.5 ? "mg" : "flame";
+    if (threat && threat.soft >= 250 && this.rng() < 0.4) return pick(this.rng() < 0.5 ? "mg" : "flame", "mg");
+    // 支援兵種有上限：醫療兵約每 6 個步兵一個，工兵只在要打敵方堡壘時帶
+    const mine = this.myComp(battle);
     const t = this.target >= 0 ? s.nodes[this.target] : undefined;
     const enemyFort = !!t && !!t.owner && t.hp > 0;
-    if (enemyFort && this.rng() < 0.2) return "engineer";
-    if (!enemyFort && s.time < 120 && this.rng() < 0.25) return "car"; // 開局用裝甲車搶點
+    if (allowed("medic") && mine.infantry >= 6 && (mine.counts.get("medic") ?? 0) * 6 < mine.infantry && this.rng() < 0.5) return "medic";
+    if (allowed("engineer") && enemyFort && mine.combat >= 5 && (mine.counts.get("engineer") ?? 0) * 7 < mine.combat && this.rng() < 0.4) {
+      return "engineer";
+    }
+    // 看對手主力是什麼兵，出剋制的兵種
+    if (this.rng() < pr.counter) {
+      const c = this.counterPick(battle);
+      if (c && allowed(c)) return c;
+    }
+    if (!enemyFort && s.time < 120 && this.rng() < 0.25) return pick("car", "rifle"); // 開局用裝甲車搶點
     const sawAir = this.sawEnemyAir > 0 && s.time - this.sawEnemyAir < 60;
-    if (sawAir && this.rng() < 0.15) return "flak";
-    const weights: [UnitType, number][] = [
-      ["rifle", 22], ["mg", 11], ["sniper", 7], ["flame", 7], ["car", 7], ["tank", 13],
-      ["at", 8], ["flak", 3], ["artillery", 5], ["engineer", 8], ["medic", 9],
-    ];
+    if (sawAir && (mine.counts.get("flak") ?? 0) < 2 && this.rng() < 0.2) return pick("flak", "rifle");
+    const weights: [UnitType, number][] = (
+      [
+        ["rifle", 24], ["mg", 12], ["sniper", 6], ["flame", 7], ["car", 7], ["tank", 14],
+        ["at", 8], ["flak", 2], ["artillery", 5],
+      ] as [UnitType, number][]
+    ).filter(([u]) => allowed(u));
     let roll = this.rng() * weights.reduce((a, [, w]) => a + w, 0);
     for (const [type, w] of weights) {
       roll -= w;
       if (roll <= 0) return type;
     }
     return "rifle";
+  }
+
+  /** 剋制：統計敵人在野外的兵力，挑最能打它們的兵種 */
+  private counterPick(battle: Battle): UnitType | null {
+    const s = battle.state;
+    let soft = 0;
+    let light = 0;
+    let hard = 0;
+    let longRange = 0; // 機槍、砲兵、狙擊手
+    s.units.forEach((u) => {
+      if (u.hp <= 0 || u.owner === this.playerId) return;
+      const def = UNITS[u.type as UnitType];
+      const v = def.cost * (u.hp / u.maxHp);
+      if (def.armor === "hard") hard += v;
+      else if (def.armor === "light") light += v;
+      else soft += v;
+      if (u.type === "mg" || u.type === "artillery" || u.type === "sniper") longRange += v;
+    });
+    const total = soft + light + hard;
+    if (total < 150) return null;
+    if (hard / total > 0.35) return this.rng() < 0.6 ? "at" : "tank";
+    if (light / total > 0.25) return this.rng() < 0.7 ? "at" : "tank";
+    if (longRange / total > 0.3) return this.rng() < 0.5 ? "sniper" : "car";
+    if (soft / total > 0.6) return this.rng() < 0.4 ? "flame" : this.rng() < 0.5 ? "tank" : "mg";
+    return null;
   }
 
   /** 補給箱：派最近的閒置部隊去撿 */
@@ -211,7 +326,9 @@ export class BotBrain {
     // 有據點被打就在那裡補兵，不然在前線集結點補兵
     const danger = threats.filter((t) => t.value > 120).sort((a, b) => b.value - a.value)[0];
     const node = danger ? danger.node : this.staging(battle, owned);
-    const reserve = battle.state.time > 60 ? 80 : 20;
+    // 平常留一筆錢；據點被打時（會規劃的電腦）把存款全部拿來在那裡補兵
+    const reserve =
+      danger && this.prof.plan > 0 ? 0 : battle.state.time > 60 ? this.prof.reserve : Math.min(20, this.prof.reserve);
     for (let i = 0; i < 3; i++) {
       const type = this.chooseUnit(battle, danger);
       if (p.fundsExact < UNITS[type].cost + reserve) return;
@@ -232,14 +349,47 @@ export class BotBrain {
     }
   }
 
+  private value(u: Unit) {
+    return UNITS[u.type as UnitType].cost * (u.hp / u.maxHp);
+  }
+
+  /** 估計打下這個據點要面對多少防禦（換算成兵力的錢） */
+  private defenseOf(battle: Battle, node: number): number {
+    const s = battle.state;
+    const n = s.nodes[node];
+    let v = 0;
+    let gpop = 0;
+    s.units.forEach((u) => {
+      if (u.owner === this.playerId || u.hp <= 0) return;
+      if (u.inNode === node) {
+        v += this.value(u);
+        gpop += UNITS[u.type as UnitType].pop;
+        return;
+      }
+      if (u.inNode >= 0) return;
+      const geom = battle.map.lanes[u.lane];
+      if (geom.a !== node && geom.b !== node) return;
+      if (Math.abs(u.x - nodeEnd(geom, node)) <= 260) v += this.value(u);
+    });
+    if (n.owner && n.owner !== this.playerId && n.hp > 0) {
+      v += n.hp * 0.25 * (1 + Math.min(GARRISON_FIRE_MAX, gpop * GARRISON_FIRE_BONUS));
+    }
+    s.structures.forEach((st) => {
+      if (st.owner === this.playerId || !st.owner || st.node !== node || st.hp <= 0) return;
+      v += STRUCTURES[st.kind as BuildKind].cost * 1.5 * (st.hp / st.maxHp);
+    });
+    return v;
+  }
+
   /** 集結點的兵夠多（或養兵費太高）就全部派去打目標 */
   private attack(battle: Battle, p: Player, owned: number[]) {
     if (this.target < 0) return;
+    if (this.prof.plan > 0) return this.attackPlanned(battle, p, owned);
     const s = battle.state;
     for (const node of owned) {
       const pop = battle.garrisonAt(node);
       if (pop === 0) continue;
-      const need = node === p.hq ? 7 : 5;
+      const need = (node === p.hq ? 7 : 5) + this.prof.attackNeed;
       const hoarding = upkeepFor(battle.garrisonPopOf(p.id)) >= 2.2;
       const ready = pop >= need + Math.min(6, Math.floor(s.time / 90)) || hoarding || (s.time < 50 && pop >= 3);
       if (!ready) continue;
@@ -252,6 +402,60 @@ export class BotBrain {
       const arr = UNIT_TYPES.map((t) => counts.get(t) ?? 0);
       battle.dispatch(this.playerId, node, arr, [], { node: this.target }, true);
     }
+  }
+
+  /**
+   * 有計畫的進攻：後方據點的兵先集中到集結點，
+   * 等集結點的兵力夠壓過目標的防禦（堡壘血量、駐軍、附近敵軍、工事）才一起出擊。
+   */
+  private attackPlanned(battle: Battle, p: Player, owned: number[]) {
+    const s = battle.state;
+    const pr = this.prof;
+    const stage = this.staging(battle, owned);
+    if (pr.consolidate) {
+      for (const node of owned) {
+        if (node === stage) continue;
+        const inside = battle.garrisonUnits(p.id, node);
+        const keep = node === p.hq ? 3 : 1;
+        if (inside.length < keep + 3 || this.nearEnemies(battle, node) > 0) continue;
+        const counts = new Map<UnitType, number>();
+        inside.slice(keep).forEach((u) => counts.set(u.type as UnitType, (counts.get(u.type as UnitType) ?? 0) + 1));
+        battle.dispatch(this.playerId, node, UNIT_TYPES.map((t) => counts.get(t) ?? 0), [], { node: stage }, true);
+      }
+    }
+    const inside = battle.garrisonUnits(p.id, stage);
+    const keep = stage === p.hq && s.time > 120 ? 2 : 0;
+    if (inside.length <= keep) return;
+    // 已經在路上打這個目標的兵也算進去
+    let force = 0;
+    s.units.forEach((u) => {
+      if (u.owner !== p.id || u.hp <= 0) return;
+      if ((u.inNode === stage && u.departAt === 0) || (u.inNode < 0 && u.destNode === this.target && u.mode !== "retreat")) {
+        force += this.value(u);
+      }
+    });
+    const defense = this.defenseOf(battle, this.target);
+    // 快結束時要搶據點，標準放寬
+    const ratio = s.time > s.duration - 120 ? pr.plan * 0.6 : pr.plan;
+    const pop = battle.garrisonAt(stage);
+    const full = pop >= battle.garrisonCapAt(stage) - 1 || p.pop >= POP_CAP - 4 || upkeepFor(battle.garrisonPopOf(p.id)) >= 2.6;
+    const rush = s.time < 50 && pop >= 3 && defense < 120;
+    if (force < defense * ratio + 60 && !full && !rush) return;
+    const counts = new Map<UnitType, number>();
+    inside.slice(keep).forEach((u) => counts.set(u.type as UnitType, (counts.get(u.type as UnitType) ?? 0) + 1));
+    battle.dispatch(this.playerId, stage, UNIT_TYPES.map((t) => counts.get(t) ?? 0), [], { node: this.target }, true);
+  }
+
+  /** 據點附近的敵軍兵力 */
+  private nearEnemies(battle: Battle, node: number) {
+    let v = 0;
+    battle.state.units.forEach((u) => {
+      if (u.owner === this.playerId || u.inNode >= 0 || u.hp <= 0) return;
+      const geom = battle.map.lanes[u.lane];
+      if (geom.a !== node && geom.b !== node) return;
+      if (Math.abs(u.x - nodeEnd(geom, node)) <= 300) v += this.value(u);
+    });
+    return v;
   }
 
   /** 閒著的部隊（守在路上、或打完的）重新派去目標；血太少的撤退 */
@@ -271,10 +475,18 @@ export class BotBrain {
         groups.set(u.group, g);
       }
     });
-    if (idle.length > 0 && this.target >= 0) battle.order(this.playerId, idle, [], { node: this.target }, true);
+    if (idle.length > 0 && this.target >= 0) {
+      if (this.prof.plan > 0) {
+        // 零散的兵先回集結點，跟大部隊一起再出發
+        const owned = battle.ownedNodes(p.id);
+        if (owned.length) battle.order(this.playerId, idle, [], { node: this.staging(battle, owned) }, true);
+      } else battle.order(this.playerId, idle, [], { node: this.target }, true);
+    }
     for (const g of groups.values()) {
       const ratio = g.reduce((a, u) => a + u.hp / u.maxHp, 0) / g.length;
-      if (ratio < 0.3 && g.length >= 2 && this.rng() < 0.5) battle.retreat(this.playerId, g.map((u) => u.id));
+      if (this.prof.retreat > 0 && ratio < this.prof.retreatAt && g.length >= 2 && this.rng() < this.prof.retreat) {
+        battle.retreat(this.playerId, g.map((u) => u.id));
+      }
     }
   }
 

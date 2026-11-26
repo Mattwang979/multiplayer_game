@@ -17,6 +17,7 @@ export interface PlayerState {
   faction: number;
   hq: number;
   isBot: boolean;
+  botLevel: string;
   connected: boolean;
   alive: boolean;
   rank: number;

@@ -2,6 +2,7 @@
 import { Room, matchMaker, type Client } from "colyseus";
 import {
   FORT_SPECS,
+  isBotLevel,
   KICK_CODE,
   type FortSpec,
   type Dest,
@@ -50,7 +51,7 @@ export class BattleRoom extends Room<{ state: BattleState }> {
 
   messages = {
     // ---------- 大廳 ----------
-    addBot: (client: Client, msg: { faction?: number }) => {
+    addBot: (client: Client, msg: { faction?: number; level?: string }) => {
       if (!this.isHost(client) || this.state.phase !== "lobby") return;
       const faction = typeof msg?.faction === "number" && this.factionFree(msg.faction) ? msg.faction : this.freeFaction();
       if (faction < 0) return this.notice(client, "房間已滿");
@@ -59,8 +60,15 @@ export class BattleRoom extends Room<{ state: BattleState }> {
       p.name = BOT_NAMES[(this.botCounter - 1) % BOT_NAMES.length];
       p.faction = faction;
       p.isBot = p.wasBot = true;
+      p.botLevel = isBotLevel(msg?.level) ? msg.level : "normal";
       this.state.players.set(p.id, p);
       this.syncMatchmaking();
+    },
+    setBotLevel: (client: Client, msg: { id?: string; level?: string }) => {
+      if (!this.isHost(client) || this.state.phase !== "lobby") return;
+      const p = typeof msg?.id === "string" ? this.state.players.get(msg.id) : undefined;
+      if (!p || !p.wasBot || !isBotLevel(msg?.level)) return;
+      p.botLevel = msg.level;
     },
     removePlayer: (client: Client, msg: { id?: string }) => {
       if (!this.isHost(client) || this.state.phase !== "lobby") return;
@@ -220,7 +228,8 @@ export class BattleRoom extends Room<{ state: BattleState }> {
       if (!p.isBot) return;
       let brain = this.bots.get(p.id);
       if (!brain) {
-        brain = new BotBrain(p.id);
+        // 原本就是電腦的照房主設的難度；真人斷線由電腦代管就用普通
+        brain = new BotBrain(p.id, Math.random, p.wasBot && isBotLevel(p.botLevel) ? p.botLevel : "normal");
         this.bots.set(p.id, brain);
       }
       brain.update(this.battle, dt);

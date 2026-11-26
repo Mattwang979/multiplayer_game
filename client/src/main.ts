@@ -8,7 +8,7 @@ import { initAudio, play, startMusic, stopMusic } from "./game/sound";
 import { createRoom, errorText, forgetRoom, joinRoom, rememberRoom, tryReconnect, type GameRoom } from "./net";
 import { bus, session } from "./session";
 import { Hud } from "./ui/hud";
-import { bindLobbyActions, homeError, renderLobby, showScreen } from "./ui/screens";
+import { bindLobbyActions, bindPracticeLevel, homeError, renderLobby, savedBotLevel, showScreen } from "./ui/screens";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -236,8 +236,9 @@ function bindHome() {
     withBusy(e.currentTarget as HTMLButtonElement, async () => {
       const room = await createRoom(playerName());
       attach(room);
-      room.send("addBot", {});
-      room.send("addBot", {});
+      const level = savedBotLevel();
+      room.send("addBot", { level });
+      room.send("addBot", { level });
       room.send("start", {});
     }),
   );
@@ -300,6 +301,7 @@ async function boot() {
   document.addEventListener("fullscreenchange", onResize);
   bindHome();
   bindLobbyActions();
+  bindPracticeLevel();
   showScreen("home");
   // 每次觸控都確認音訊是開著的（iOS 接電話、切 App 回來後會被暫停）
   // iOS Safari：雙指縮放要給戰場用，不要縮放整個網頁

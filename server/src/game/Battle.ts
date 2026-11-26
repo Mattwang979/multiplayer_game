@@ -21,6 +21,7 @@ import {
   BATTERY_RANGE,
   BOUNTY_EVENT_MULT,
   BOUNTY_RATIO,
+  BRUTAL_INCOME,
   BUILD_KINDS,
   BUILD_SLOTS,
   BUILD_START_HP,
@@ -594,7 +595,9 @@ export class Battle {
         if (p.upkeep !== 0) p.upkeep = 0;
         return;
       }
-      const income = BASE_INCOME + (bonus.get(p.id) ?? 0) + p.logistics * LOGISTICS_INCOME_PER_LEVEL;
+      // 地獄難度的電腦收入 +30%（真人斷線時由電腦代管不算）
+      const cheat = p.isBot && p.wasBot && p.botLevel === "brutal" ? BRUTAL_INCOME : 1;
+      const income = (BASE_INCOME + (bonus.get(p.id) ?? 0) + p.logistics * LOGISTICS_INCOME_PER_LEVEL) * cheat;
       const garrison = this.tally.garrisonPop.get(p.id) ?? 0;
       const upkeep = upkeepFor(garrison, (this.tally.pop.get(p.id) ?? 0) - garrison);
       p.fundsExact = Math.max(0, p.fundsExact + (income - upkeep) * dt);

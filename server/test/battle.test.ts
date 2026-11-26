@@ -2,6 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  BOT_LEVELS,
+  BRUTAL_INCOME,
   BUILD_START_HP,
   CAPTURE_GRACE,
   CONVERT_TIME,
@@ -16,6 +18,7 @@ import {
   UNIT_TYPES,
   nodeDir,
   nodeEnd,
+  type BotLevel,
   type UnitType,
 } from "@frontline/shared";
 import { Battle } from "../src/game/Battle";
@@ -409,7 +412,14 @@ for (const def of MAPS) {
       const { battle, state, events } = setup(n, def.id, 40 + n);
       const rng = seeded(7 + n);
       const bots: BotBrain[] = [];
-      state.players.forEach((p) => bots.push(new BotBrain(p.id, rng)));
+      // 每張地圖、每種人數輪流用不同難度，四種難度都會跑到
+      let k = n;
+      state.players.forEach((p) => {
+        const level = BOT_LEVELS[k++ % BOT_LEVELS.length];
+        p.isBot = p.wasBot = true;
+        p.botLevel = level;
+        bots.push(new BotBrain(p.id, rng, level));
+      });
       let steps = 0;
       let maxPop = 0;
       while (state.phase === "playing" && steps < 700 / DT) {
@@ -622,4 +632,51 @@ test("隨機事件：燃料短缺時戰車變慢、戰功懸賞時賞金加倍",
   const before = p1.fundsExact;
   run(battle, DT);
   assert.ok(p1.fundsExact - before > 220 * 0.2 * 2 - 1);
+});
+
+// ---------- 電腦難度 ----------
+function botMatch(levels: BotLevel[], map: string, seed: number) {
+  const { battle, state } = setup(levels.length, map, seed);
+  const rng = seeded(seed * 7 + 1);
+  const bots: BotBrain[] = [];
+  let i = 0;
+  state.players.forEach((p) => {
+    p.isBot = p.wasBot = true;
+    p.botLevel = levels[i];
+    bots.push(new BotBrain(p.id, rng, levels[i++]));
+  });
+  let steps = 0;
+  while (state.phase === "playing" && steps < 700 / DT) {
+    for (const b of bots) b.update(battle, DT);
+    battle.step(DT);
+    steps++;
+  }
+  return state.winnerId;
+}
+
+test("電腦難度：地獄收入 +30%；真人斷線由電腦代管不加成", () => {
+  const { battle, state } = setup(3);
+  const [brutal, takeover, human] = [...state.players.values()];
+  brutal.isBot = brutal.wasBot = true;
+  brutal.botLevel = "brutal";
+  takeover.isBot = true; // 真人斷線：wasBot 還是 false
+  takeover.botLevel = "brutal";
+  human.botLevel = "brutal";
+  run(battle, 1);
+  // 三個人開局一樣都是大本營加兩座堡壘
+  assert.ok(Math.abs(brutal.income - human.income * BRUTAL_INCOME) < 0.15, `${brutal.income} vs ${human.income}`);
+  assert.equal(takeover.income, human.income);
+});
+
+test("電腦難度：困難電腦大多打得贏簡單電腦", () => {
+  const maps = ["pass", "river", "oasis"];
+  let wins = 0;
+  for (let i = 0; i < 6; i++) {
+    // 輪流換邊，避免哪一邊地形比較好
+    const hardFirst = i % 2 === 0;
+    const w = botMatch(hardFirst ? ["hard", "easy"] : ["easy", "hard"], maps[i % 3], 500 + i);
+    if (w === (hardFirst ? "p0" : "p1")) wins++;
+  }
+  console.log(`  困難 vs 簡單：6 場贏 ${wins} 場`);
+  assert.ok(wins >= 4, `困難只贏 ${wins} 場`);
 });

@@ -1,5 +1,17 @@
 // 首頁與大廳（作戰室）
-import { FACTIONS, MAPS, MAX_PLAYERS, MIN_PLAYERS, buildMap, type Faction, type MapDef } from "@frontline/shared";
+import {
+  BOT_LEVELS,
+  BOT_LEVEL_DEFS,
+  FACTIONS,
+  MAPS,
+  MAX_PLAYERS,
+  MIN_PLAYERS,
+  buildMap,
+  isBotLevel,
+  type BotLevel,
+  type Faction,
+  type MapDef,
+} from "@frontline/shared";
 import { play } from "../game/sound";
 import { session } from "../session";
 import type { PlayerState } from "../types";
@@ -15,6 +27,58 @@ export function emblemSvg(f: Faction, size = 56) {
   else if (f.emblem === "star") shape = `<polygon points="0,-12 3,-4 11,-4 5,1 7,9 0,4 -7,9 -5,1 -11,-4 -3,-4" fill="${mark}"/>`;
   else shape = `<circle r="8" fill="none" stroke="${mark}" stroke-width="4"/>`;
   return `<svg class="emblem" viewBox="-20 -20 40 40" width="${size}" height="${size}" aria-hidden="true"><circle r="18" fill="${f.css}" stroke="#1d1d17" stroke-width="2.5"/>${shape}</svg>`;
+}
+
+// ---------- 電腦難度 ----------
+const LEVEL_KEY = "frontline.botLevel";
+
+/** 上次選的電腦難度（練習和「加入電腦」都用這個） */
+export function savedBotLevel(): BotLevel {
+  try {
+    const v = localStorage.getItem(LEVEL_KEY);
+    if (isBotLevel(v)) return v;
+  } catch {
+    // 無痕模式等情況讀不到就用預設
+  }
+  return "normal";
+}
+
+function saveBotLevel(level: BotLevel) {
+  try {
+    localStorage.setItem(LEVEL_KEY, level);
+  } catch {
+    // 存不了就算了
+  }
+}
+
+/** 四格分段按鈕；extra 會加在每個按鈕上（例如 data-id） */
+function levelSeg(current: string, extra: string, label: string) {
+  const buttons = BOT_LEVELS.map((lv) => {
+    const on = lv === current;
+    return `<button type="button" data-level="${lv}" aria-pressed="${on}" title="${BOT_LEVEL_DEFS[lv].short}"${extra}>${BOT_LEVEL_DEFS[lv].name}</button>`;
+  }).join("");
+  return `<div class="lvl-seg" role="group" aria-label="${label}">${buttons}</div>`;
+}
+
+/** 首頁「單人練習」下面的難度選擇 */
+export function bindPracticeLevel() {
+  const box = $("practice-level");
+  const desc = $("practice-level-desc");
+  const draw = () => {
+    const lv = savedBotLevel();
+    box.innerHTML = BOT_LEVELS.map(
+      (l) => `<button type="button" data-level="${l}" aria-pressed="${l === lv}">${BOT_LEVEL_DEFS[l].name}</button>`,
+    ).join("");
+    desc.textContent = BOT_LEVEL_DEFS[lv].short;
+  };
+  draw();
+  box.addEventListener("click", (e) => {
+    const el = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-level]");
+    if (!el || !isBotLevel(el.dataset.level)) return;
+    play("click");
+    saveBotLevel(el.dataset.level);
+    draw();
+  });
 }
 
 export function showScreen(id: "home" | "lobby" | "game") {
@@ -53,7 +117,7 @@ export function renderLobby() {
     const tags = [
       p.id === s.hostId ? '<span class="tag gold">房主</span>' : "",
       p.id === session.myId ? '<span class="tag gold">你</span>' : "",
-      p.isBot ? '<span class="tag">電腦</span>' : "",
+      p.isBot ? `<span class="tag">電腦${p.botLevel && isBotLevel(p.botLevel) && !isHost ? `・${BOT_LEVEL_DEFS[p.botLevel].name}` : ""}</span>` : "",
       !p.connected ? '<span class="tag">重新連線中</span>' : "",
     ].join("");
     const canKick = isHost && p.id !== session.myId;
@@ -62,6 +126,12 @@ export function renderLobby() {
       <p class="fname" style="color:${f.light}">${f.name}</p>
       <p class="pname">${esc(p.name)}</p>
       <div class="tags">${tags}</div>
+      ${
+        p.isBot && isHost && isBotLevel(p.botLevel)
+          ? levelSeg(p.botLevel, ` data-act="lvl" data-id="${p.id}"`, `${esc(p.name)} 的難度`) +
+            `<p class="lvl-desc">${BOT_LEVEL_DEFS[p.botLevel].short}</p>`
+          : ""
+      }
       <div class="slot-actions">${canKick ? `<button class="btn small" data-act="kick" data-id="${p.id}">${p.isBot ? "移除電腦" : "請離開"}</button>` : ""}</div>
     </div>`;
   }).join("");
@@ -149,7 +219,11 @@ export function bindLobbyActions() {
     const el = (e.target as HTMLElement).closest<HTMLElement>("button[data-act]");
     if (!el) return;
     play("click");
-    if (el.dataset.act === "bot") session.send("addBot", { faction: Number(el.dataset.f) });
+    if (el.dataset.act === "bot") session.send("addBot", { faction: Number(el.dataset.f), level: savedBotLevel() });
+    if (el.dataset.act === "lvl" && isBotLevel(el.dataset.level)) {
+      saveBotLevel(el.dataset.level);
+      session.send("setBotLevel", { id: el.dataset.id, level: el.dataset.level });
+    }
     if (el.dataset.act === "color") session.send("setFaction", { faction: Number(el.dataset.f) });
     if (el.dataset.act === "kick") session.send("removePlayer", { id: el.dataset.id });
   });

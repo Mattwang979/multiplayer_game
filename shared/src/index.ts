@@ -368,3 +368,15 @@ export interface BattleHistory {
   samples: HistorySample[];
   out: { t: number; id: string }[]; // 出局時間
 }
+
+// ---------- 電腦難度 ----------
+export type BotLevel = "easy" | "normal" | "hard" | "brutal";
+export const BOT_LEVELS: BotLevel[] = ["easy", "normal", "hard", "brutal"];
+export const BOT_LEVEL_DEFS: Record<BotLevel, { name: string; short: string }> = {
+  easy: { name: "簡單", short: "反應慢、兵一買就零星送上來、只出基本兵種" },
+  normal: { name: "普通", short: "會蓋工事、升級、叫空軍，集滿人數才進攻" },
+  hard: { name: "困難", short: "集中兵力算好才打、被打時即時補兵、會剋制你的兵種" },
+  brutal: { name: "地獄", short: "困難的打法，再加上收入 +30%" },
+};
+export const BRUTAL_INCOME = 1.3;
+export const isBotLevel = (v: unknown): v is BotLevel => typeof v === "string" && (BOT_LEVELS as string[]).includes(v);
