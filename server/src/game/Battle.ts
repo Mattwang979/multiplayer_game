@@ -41,6 +41,8 @@ import {
   FORT_SPECS,
   FORT_SPEC_DEFS,
   FUEL_SPEED,
+  HISTORY_INTERVAL,
+  NODE_POWER,
   HOSPITAL_HEAL,
   HOSPITAL_RANGE,
   STORM_RANGE,
@@ -95,6 +97,7 @@ import {
   upkeepFor,
   type AirKind,
   type ArmorClass,
+  type BattleHistory,
   type BuildKind,
   type Dest,
   type EventKind,
@@ -145,6 +148,9 @@ export class Battle {
   private lastEvent: EventKind | "" = "";
   private nextShell = 0;
   private shells: { lane: number; x: number; at: number }[] = [];
+  /** 結算用：每 HISTORY_INTERVAL 秒記一次每個人的勢力 */
+  history: BattleHistory = { players: [], samples: [], out: [] };
+  private nextSample = 0;
   private tally: Tally = { garrison: [], pop: new Map(), garrisonPop: new Map() };
 
   constructor(
@@ -220,6 +226,10 @@ export class Battle {
     }
     this.countForts();
     this.updateTally();
+    this.history = { players: [], samples: [], out: [] };
+    s.players.forEach((p) => this.history.players.push({ id: p.id, name: p.name, faction: p.faction }));
+    this.nextSample = 0;
+    this.recordHistory();
 
     s.time = 0;
     s.duration = duration;
@@ -564,6 +574,7 @@ export class Battle {
     this.countForts();
 
     this.updateFronts(dt);
+    if (s.time >= this.nextSample) this.recordHistory();
     if (s.time >= s.duration) this.endByTime();
   }
 
@@ -1523,6 +1534,8 @@ export class Battle {
     if (!victim || !victim.alive) return;
     victim.alive = false;
     victim.rank = this.alivePlayers().length + 1;
+    this.recordHistory(); // 出局前最後的樣子
+    this.history.out.push({ t: Math.round(s.time * 10) / 10, id: playerId });
     s.nodes.forEach((n) => {
       if (n.owner === playerId) this.neutralize(n);
     });
@@ -1622,7 +1635,43 @@ export class Battle {
     s.endReason = reason;
     s.phase = "ended";
     this.bombs = [];
+    this.recordHistory();
     this.emit("ended", { winnerId, reason });
+    this.emit("history", this.history);
+  }
+
+  // ================================================================ 結算圖
+
+  private recordHistory() {
+    const s = this.state;
+    const power = new Map<string, number>();
+    const army = new Map<string, number>();
+    const forts = new Map<string, number>();
+    const add = (m: Map<string, number>, id: string, v: number) => m.set(id, (m.get(id) ?? 0) + v);
+    s.units.forEach((u) => {
+      if (u.hp <= 0) return;
+      const v = UNITS[u.type as UnitType].cost * (u.hp / u.maxHp);
+      add(army, u.owner, v);
+      add(power, u.owner, v);
+    });
+    s.structures.forEach((st) => {
+      if (st.hp > 0) add(power, st.owner, STRUCTURES[st.kind as StructureKind].cost * (st.hp / st.maxHp));
+    });
+    s.nodes.forEach((n) => {
+      if (!n.owner || n.hp <= 0) return;
+      add(forts, n.owner, 1);
+      add(power, n.owner, (NODE_POWER[n.kind] ?? 150) * (n.kind === "hq" ? n.hp / n.maxHp : 1));
+    });
+    const v: Record<string, [number, number, number]> = {};
+    s.players.forEach((p) => {
+      if (!p.alive && this.history.out.some((o) => o.id === p.id)) return;
+      v[p.id] = [Math.round(power.get(p.id) ?? 0), Math.round(army.get(p.id) ?? 0), forts.get(p.id) ?? 0];
+    });
+    const t = Math.round(s.time * 10) / 10;
+    const last = this.history.samples[this.history.samples.length - 1];
+    if (last && Math.abs(last.t - t) < 0.01) last.v = v;
+    else this.history.samples.push({ t, v });
+    this.nextSample = (Math.floor(s.time / HISTORY_INTERVAL) + 1) * HISTORY_INTERVAL;
   }
 
   // ================================================================ 小工具

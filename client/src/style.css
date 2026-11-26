@@ -315,6 +315,33 @@ body.mobile .rules-list li { font-size: 13px; line-height: 1.5; }
 .result-box th { font-size: 12px; color: var(--muted); letter-spacing: 2px; font-weight: 700; }
 .result-box .rank { font-family: var(--stencil); font-size: 20px; color: var(--gold); }
 .result-box .actions { display: flex; justify-content: center; gap: 12px; }
+.result { overflow-y: auto; }
+.result-box { width: min(760px, 94vw); max-height: 96vh; overflow-y: auto; }
+
+/* 結算：勢力變化圖 */
+.hist { display: flex; flex-direction: column; gap: 8px; }
+.hist-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.hist-head h3 { margin: 0; font-size: 16px; font-weight: 900; color: var(--text); letter-spacing: 3px; }
+.hist-tabs { display: flex; gap: 4px; }
+.hist-tabs button { min-height: 30px; padding: 0 14px; background: var(--panel-2); border: 1px solid var(--line-2); color: var(--muted); font-size: 13px; font-weight: 900; cursor: pointer; }
+.hist-tabs button.on { border-color: var(--gold); color: var(--gold); }
+.hist-note { margin: -4px 0 0; font-size: 12px; color: var(--muted); }
+.hist-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--text); }
+.hist-li { display: inline-flex; align-items: center; gap: 6px; }
+.hist-li.me { font-weight: 900; }
+.hist-li em { font-style: normal; font-size: 12px; color: var(--muted); }
+.hist-plot { position: relative; background: #1a1912; border: 1px solid var(--line); }
+.hist-plot svg { display: block; width: 100%; height: auto; font-family: inherit; touch-action: pan-y; }
+.hist-plot svg:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.hist-hit { cursor: crosshair; }
+.hist-tip { position: absolute; z-index: 2; min-width: 130px; padding: 6px 10px; background: rgba(8,8,6,.96); border: 1px solid var(--line-2); pointer-events: none; }
+.ht-time { margin: 0 0 4px; font-size: 12px; color: var(--muted); }
+.ht-row { margin: 2px 0; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.ht-row strong { min-width: 44px; font-size: 14px; color: var(--text); font-variant-numeric: tabular-nums; }
+.hist-empty { margin: 0; font-size: 13px; color: var(--muted); text-align: center; }
+.hist-table summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.hist-table table { margin-top: 6px; font-size: 12px !important; }
+.hist-table td, .hist-table th { padding: 4px 6px !important; font-variant-numeric: tabular-nums; }
 
 /* 桌機：左右欄拆開，按鈕排成一排 */
 .hud-col { display: contents; }
@@ -448,8 +475,13 @@ body.mobile .banner .b { font-size: clamp(16px, 5vh, 24px); padding: 6px 34px 6p
 body.mobile .target-hint { top: 40px; font-size: 13px; padding: 4px 4px 4px 12px; }
 body.mobile .target-hint .btn { min-height: 34px; }
 body.mobile .result-box { max-height: 92vh; overflow-y: auto; padding: 18px; gap: 12px; }
-body.mobile .result-box h2 { font-size: 44px; }
+body.mobile .result-box h2 { font-size: 34px; }
+body.mobile .result-box .reason { margin-top: -8px; font-size: 13px; }
 body.mobile .result-box table { font-size: 13px; }
+body.mobile .result-box th, body.mobile .result-box td { padding: 4px 6px; }
+body.mobile .result-box .rank { font-size: 16px; }
+body.mobile .result-box { touch-action: pan-y; }
+body.mobile .hist-legend { font-size: 12px; }
 
 /* 直拿手機：提示轉成橫向 */
 .rotate-hint {

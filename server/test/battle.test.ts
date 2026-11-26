@@ -429,6 +429,15 @@ for (const def of MAPS) {
       state.players.forEach((p) => (deployed += p.deployed));
       console.log(`  ${def.name} ${n} 人：${state.time.toFixed(0)} 秒，${state.endReason}，買兵 ${deployed}，最高人口 ${maxPop}，佔領 ${caps} 次，攻破 ${falls} 次`);
       assert.ok(caps >= 2, "應該有據點被佔領");
+      // 結算圖：每 5 秒一筆，最後一筆是結束時間，出局的人有紀錄
+      const h = battle.history;
+      assert.equal(h.players.length, n);
+      assert.ok(h.samples.length >= Math.floor(state.time / 5));
+      assert.ok(Math.abs(h.samples[h.samples.length - 1].t - state.time) < 0.2);
+      assert.ok(events.some((e) => e.type === "history"));
+      let outs = 0;
+      state.players.forEach((p) => (outs += p.alive ? 0 : 1));
+      assert.equal(h.out.length, outs);
     });
   }
 }

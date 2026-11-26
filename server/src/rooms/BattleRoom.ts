@@ -90,6 +90,10 @@ export class BattleRoom extends Room<{ state: BattleState }> {
       if (this.state.players.size < MIN_PLAYERS) return this.notice(client, "至少要兩方才能開戰，可以先加電腦");
       this.startBattle();
     },
+    /** 結算畫面拿勢力變化圖的資料（結束時已經廣播過，這是給中途重連的人） */
+    history: (client: Client) => {
+      if (this.state.phase === "ended") client.send("history", this.battle.history);
+    },
     backToLobby: (client: Client) => {
       if (!this.isHost(client) || this.state.phase !== "ended") return;
       this.toLobby();
@@ -226,7 +230,9 @@ export class BattleRoom extends Room<{ state: BattleState }> {
 
   private startBattle() {
     this.bots.clear();
-    this.battle.start();
+    // 開發測試用：設環境變數 MATCH_SECONDS 可以縮短對局（正式環境不設就是 10 分鐘）
+    const testDuration = Number(process.env.MATCH_SECONDS);
+    this.battle.start(Number.isFinite(testDuration) && testDuration >= 30 ? testDuration : undefined);
     this.lock();
   }
 

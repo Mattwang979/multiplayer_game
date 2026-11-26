@@ -23,6 +23,7 @@ import {
   WINNER_DRAW,
   buildMap,
   type AirKind,
+  type BattleHistory,
   type EventKind,
   type FortSpec,
   type MapLayout,
@@ -31,6 +32,7 @@ import {
 import { enterFullscreen, exitFullscreen, isFullscreen, isMobile, isStandalone } from "../device";
 import { initAudio, isMusicOn, isMuted, play, setMusicIntensity, stopMusic, toggleMusic, toggleMute } from "../game/sound";
 import { bus, session } from "../session";
+import { mountHistory } from "./chart";
 import type { PlayerState, UnitState } from "../types";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -55,6 +57,7 @@ export class Hud {
   private buildMenu = $("build-menu");
   private groupBar = $("group-bar");
   private tab = 0; // 兵種分頁
+  private history: BattleHistory | null = null; // 結算的勢力變化圖資料
   private targetHint = $("target-hint");
   private result = $("result");
   private map: MapLayout | null = null;
@@ -85,6 +88,11 @@ export class Hud {
       bus.on("fortFallen", (m: { node: number; owner: string; faction: number; by: string }) => this.onFortFallen(m)),
       bus.on("airDown", (m: { kind: AirKind }) => this.addFeed(`${AIRCRAFT[m.kind].name === "空降" ? "運輸機" : "轟炸機"}被擊落！`, "#ff9a5c")),
       bus.on("newBattle", () => this.resetForBattle()),
+      bus.on("history", (h: BattleHistory) => {
+        this.history = h;
+        const mount = this.result.querySelector<HTMLElement>(".hist-mount");
+        if (mount) mountHistory(mount, h, session.myId);
+      }),
       bus.on("event", (m: { kind: EventKind; players?: string[] }) => this.onEvent(m)),
       bus.on("eventEnd", () => this.addFeed("事件結束", "#bfb9a6")),
       bus.on("crateTaken", (m: { by: string; faction: number; amount: number }) => {
@@ -135,6 +143,7 @@ export class Hud {
     session.enter = true;
     session.clearPicks();
     this.groupBar.classList.add("hidden");
+    this.history = null;
   }
 
   // ================================================================ 每一格更新
@@ -871,12 +880,16 @@ export class Hud {
       <h2 class="${win ? "" : "lose"}">${title}</h2>
       <p class="reason">${esc(s.endReason)}</p>
       <table><thead><tr><th>名次</th><th>陣營</th><th>指揮官</th><th>擊殺</th><th>佔領</th><th>買兵</th><th>花費</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="hist-mount"><p class="hist-empty">載入勢力變化圖…</p></div>
       <div class="actions">
         ${isHost ? '<button class="btn primary" data-act="again">回到作戰室再戰</button>' : '<p style="margin:0;color:#a89f84">等房主開下一局…</p>'}
         <button class="btn" data-act="leave">離開房間</button>
       </div>
     </div>`;
     this.result.classList.remove("hidden");
+    const mount = this.result.querySelector<HTMLElement>(".hist-mount")!;
+    if (this.history) mountHistory(mount, this.history, me.id);
+    else session.send("history"); // 中途重連的人沒收到廣播，跟伺服器要
     play(win ? "victory" : "defeat", 1);
   }
 

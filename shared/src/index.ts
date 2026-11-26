@@ -353,3 +353,18 @@ export const WINNER_DRAW = "draw";
 
 /** 房主把玩家移出房間時用的關閉代碼（Colyseus 的 4000 是「自願離開」，不能拿來用） */
 export const KICK_CODE = 4100;
+
+// ---------- 結算的勢力變化圖 ----------
+export const HISTORY_INTERVAL = 5; // 每幾秒記一次
+/** 勢力 = 部隊價值（造價 × 剩餘血量比例）＋工事價值＋據點價值 */
+export const NODE_POWER: Record<string, number> = { hq: 400, bigfort: 250, fort: 150 };
+export interface HistorySample {
+  t: number;
+  /** 玩家 id → [勢力, 兵力（部隊價值）, 據點數] */
+  v: Record<string, [number, number, number]>;
+}
+export interface BattleHistory {
+  players: { id: string; name: string; faction: number }[];
+  samples: HistorySample[];
+  out: { t: number; id: string }[]; // 出局時間
+}

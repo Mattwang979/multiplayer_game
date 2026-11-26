@@ -130,7 +130,7 @@ function watchdog() {
 // ---------------------------------------------------------------- 房間
 
 const CONSENTED = 4000; // Colyseus：正常、自願離開
-const SERVER_EVENTS = ["bomb", "paradrop", "airDown", "airIncoming", "eliminated", "hqAlert", "captured", "fortFallen", "leader", "built", "converted", "event", "eventEnd", "crateTaken", "barrageMark", "ended", "notice"];
+const SERVER_EVENTS = ["bomb", "paradrop", "airDown", "airIncoming", "eliminated", "hqAlert", "captured", "fortFallen", "leader", "built", "converted", "event", "eventEnd", "crateTaken", "barrageMark", "history", "ended", "notice"];
 
 function attach(room: GameRoom) {
   session.room = room;
