@@ -25,7 +25,7 @@
         <p class="eyebrow">WWII · 2–4 PLAYERS · FREE FOR ALL</p>
         <h1 class="logo">FRONT<br />LINE</h1>
         <p class="logo-zh">前線</p>
-        <p class="tagline">四支部隊在環形戰場混戰。出兵推線、蓋工事、叫轟炸機，活到最後的才是贏家。</p>
+        <p class="tagline">2–4 支部隊搶奪堡壘。買兵、拖曳派兵、改建堡壘、叫轟炸機，打爆所有大本營就贏。</p>
         <label class="field">
           <span>你的代號</span>
           <input id="name-input" maxlength="10" placeholder="例如：鐵血上校" autocomplete="nickname" />
@@ -34,6 +34,7 @@
           <button id="btn-create" class="btn primary">建立房間</button>
           <button id="btn-practice" class="btn">單人練習（對兩個電腦）</button>
           <button id="btn-fullscreen" class="btn mobile-only">全螢幕橫向遊玩</button>
+          <button id="btn-rules" class="btn rules-btn">遊戲規則</button>
         </div>
         <div class="join-row">
           <label class="field grow">
@@ -44,6 +45,24 @@
         </div>
         <p id="home-error" class="error" role="alert"></p>
       </div>
+      <aside id="rules" class="rules" aria-label="遊戲規則">
+        <div class="rules-card">
+          <div class="rules-head">
+            <h2>怎麼玩</h2>
+            <button id="btn-rules-close" class="btn small rules-close" aria-label="關閉規則">✕</button>
+          </div>
+          <ol class="rules-list">
+            <li><b>目標</b>打爆其他人的大本營。10 分鐘到了，堡壘最多的人贏。</li>
+            <li><b>買兵</b>點自己的據點，在面板買兵。兵會待在據點裡回血，但囤越多養兵費越貴。</li>
+            <li><b>派兵</b>從據點拖到道路或別的據點就出發，拖曳經過的據點會變成必經點。沒選數量就是全部派出。</li>
+            <li><b>調度</b>點自己的部隊選整隊，再拖曳或點地圖換目的地，也可以撤退回據點回血。</li>
+            <li><b>佔領</b>把堡壘打到 0 變廢墟，派兵在旁邊站 3 秒就是你的。佔下後可以改建成砲台、兵營、補給站、防空要塞或野戰醫院。</li>
+            <li><b>剋制</b>步兵 → 反戰車砲 → 戰車 → 步兵；狙擊手剋機槍和砲兵；裝甲車剋步兵；工兵拆堡壘最快；醫療兵幫步兵回血。</li>
+            <li><b>其他</b>路邊的 ＋ 可以蓋工事（要施工）；30 秒後能叫轟炸機和空降；不時有隨機事件；堡壘最多的人會被懸賞。</li>
+            <li><b>手機</b>橫著玩；兩指縮放、拖空地移動戰場。</li>
+          </ol>
+        </div>
+      </aside>
     </section>
 
     <!-- 大廳 -->
@@ -76,7 +95,12 @@
     <!-- 對局 -->
     <section id="screen-game" class="screen hidden">
       <div id="game-wrap">
+        <div class="canvas-fallback" aria-hidden="true"><p>載入戰場中…</p></div>
         <div id="game-canvas"></div>
+        <div id="canvas-recover" class="canvas-recover hidden" role="status">
+          <p>畫面重新載入中…</p>
+          <button id="btn-recover" class="btn small">重新載入戰場</button>
+        </div>
         <button id="btn-zoom" class="btn small zoom-btn hidden" aria-label="縮回全圖">全圖</button>
         <div class="vignette" aria-hidden="true"></div>
         <div class="grain" aria-hidden="true"></div>

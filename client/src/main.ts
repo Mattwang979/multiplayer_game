@@ -16,10 +16,26 @@ let game: Phaser.Game | null = null;
 let hud: Hud | null = null;
 let lastPhase = "";
 
-function ensureGame() {
-  if (game) return;
+// ---------------------------------------------------------------- 戰場畫布（含黑屏自救）
+// 手機切到背景、記憶體不夠時，瀏覽器會把 WebGL 畫布收回去（context lost），
+// 有時候不會還回來，畫面就一直黑的。這裡偵測到就把整個 Phaser 畫面重建一次；
+// 重建兩次還不行就改用相容性比較好的 Canvas 模式。
+let rebuilds = 0;
+let lostAt = 0;
+let visibleSince = performance.now();
+let lastWatch = 0;
+
+function useCanvasRenderer() {
+  try {
+    return localStorage.getItem("frontline.renderer") === "canvas";
+  } catch {
+    return false;
+  }
+}
+
+function createGame() {
   game = new Phaser.Game({
-    type: Phaser.AUTO,
+    type: useCanvasRenderer() ? Phaser.CANVAS : Phaser.AUTO,
     parent: "game-canvas",
     width: WORLD_W,
     height: WORLD_H,
@@ -29,8 +45,86 @@ function ensureGame() {
     disableContextMenu: true,
     banner: false,
   });
-  hud = new Hud();
-  hud.onLeave = () => leaveRoom();
+  const g = game;
+  g.events.once("ready", () => {
+    g.canvas?.addEventListener("webglcontextlost", () => {
+      lostAt = performance.now();
+      showRecover("畫面重新載入中…");
+    });
+    g.canvas?.addEventListener("webglcontextrestored", () => {
+      lostAt = 0;
+      showRecover("");
+    });
+  });
+  refreshCanvasSoon();
+}
+
+function ensureGame() {
+  if (!game) createGame();
+  if (!hud) {
+    hud = new Hud();
+    hud.onLeave = () => leaveRoom();
+  }
+}
+
+/** 把整個 Phaser 畫面丟掉重建（狀態都在伺服器，重建後會自己畫回來） */
+function rebuildGame(reason: string) {
+  console.warn("重建戰場畫面：", reason);
+  rebuilds += 1;
+  if (rebuilds >= 2) {
+    try {
+      localStorage.setItem("frontline.renderer", "canvas");
+    } catch {
+      /* ignore */
+    }
+  }
+  const old = game;
+  game = null;
+  lostAt = 0;
+  try {
+    old?.destroy(true);
+  } catch (e) {
+    console.error(e);
+  }
+  document.querySelectorAll("#game-canvas canvas").forEach((c) => c.remove());
+  createGame();
+  showRecover("");
+}
+
+function refreshCanvasSoon() {
+  for (const ms of [0, 150, 600, 1500]) setTimeout(() => game?.scale.refresh(), ms);
+}
+
+function showRecover(text: string) {
+  const el = $("canvas-recover");
+  el.classList.toggle("hidden", !text);
+  if (text) el.querySelector("p")!.textContent = text;
+}
+
+/** 每秒檢查一次：畫布大小是 0、WebGL 被收回沒還、畫面停住不動 → 修 */
+function watchdog() {
+  if (!game || document.hidden || $("screen-game").classList.contains("hidden")) return;
+  const now = performance.now();
+  const parent = $("game-canvas").getBoundingClientRect();
+  const rect = game.canvas?.getBoundingClientRect();
+  if (parent.width > 20 && parent.height > 20 && rect && (rect.width < 10 || rect.height < 10)) game.scale.refresh();
+  const gl = (game.renderer as unknown as { gl?: WebGLRenderingContext }).gl;
+  if (gl && typeof gl.isContextLost === "function" && gl.isContextLost()) {
+    if (!lostAt) {
+      lostAt = now;
+      showRecover("畫面重新載入中…");
+    }
+    if (now - lostAt > 2500) rebuildGame("WebGL context lost");
+    return;
+  }
+  if (lostAt && now - lostAt > 2500) {
+    lostAt = 0;
+    showRecover("");
+  }
+  // 場景沒有在更新（例如手機回到前景後卡住）
+  const scene = game.scene.getScene("battle") as BattleScene | null;
+  const stalled = !!scene && game.isBooted && now - visibleSince > 5000 && now - scene.lastFrame > 4000;
+  if (stalled) rebuildGame("畫面停住");
 }
 
 // ---------------------------------------------------------------- 房間
@@ -71,6 +165,7 @@ function onState() {
     } else {
       ensureGame();
       showScreen("game");
+      refreshCanvasSoon();
       if (prev === "lobby" || prev === "") {
         if (s.phase === "playing") {
           bus.emit("newBattle");
@@ -174,6 +269,15 @@ function onResize() {
 
 function loop() {
   requestAnimationFrame(loop);
+  const now = performance.now();
+  if (now - lastWatch > 1000) {
+    lastWatch = now;
+    try {
+      watchdog();
+    } catch (e) {
+      console.error(e);
+    }
+  }
   try {
     if (session.state && session.state.phase !== "lobby") hud?.update();
   } catch (e) {
@@ -185,6 +289,14 @@ async function boot() {
   updateDeviceClass();
   window.addEventListener("resize", onResize);
   window.addEventListener("orientationchange", () => setTimeout(onResize, 200));
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    visibleSince = performance.now();
+    refreshCanvasSoon();
+  });
+  $("btn-recover").addEventListener("click", () => rebuildGame("玩家按了重新載入"));
+  $("btn-rules").addEventListener("click", () => $("rules").classList.add("open"));
+  $("btn-rules-close").addEventListener("click", () => $("rules").classList.remove("open"));
   document.addEventListener("fullscreenchange", onResize);
   bindHome();
   bindLobbyActions();

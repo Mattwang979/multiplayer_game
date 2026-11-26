@@ -159,6 +159,8 @@ export class BattleScene extends Phaser.Scene {
   private gesture = false; // 雙指手勢進行中：放開前不當成點擊
   private zoomBtn: HTMLElement | null = null;
   private clock = 0;
+  /** 最後一次 update 的時間（main.ts 的看門狗用來判斷畫面有沒有停住） */
+  lastFrame = performance.now();
   private unitScale = UNIT_SCALE_DESKTOP;
   private offs: (() => void)[] = [];
 
@@ -204,7 +206,9 @@ export class BattleScene extends Phaser.Scene {
     this.zoomBtn = document.getElementById("btn-zoom");
     const resetZoom = () => this.setView(1, WORLD_W / 2, WORLD_H / 2, WORLD_W / 2, WORLD_H / 2);
     this.zoomBtn?.addEventListener("click", resetZoom);
-    this.events.once("shutdown", () => this.zoomBtn?.removeEventListener("click", resetZoom));
+    const cleanupZoom = () => this.zoomBtn?.removeEventListener("click", resetZoom);
+    this.events.once("shutdown", cleanupZoom);
+    this.events.once("destroy", cleanupZoom);
 
     this.offs.push(
       bus.on("bomb", (m: { lane: number; x: number }) => this.onBomb(m)),
@@ -224,7 +228,15 @@ export class BattleScene extends Phaser.Scene {
       bus.on("newBattle", () => (this.mapId = "")),
       bus.on("cancelDrag", () => this.endDrag()),
     );
-    this.events.once("shutdown", () => this.offs.forEach((f) => f()));
+    // 畫面重建時（destroy）也要把事件拿掉，不然舊的場景還會收到事件
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      this.offs.forEach((f) => f());
+    };
+    this.events.once("shutdown", cleanup);
+    this.events.once("destroy", cleanup);
   }
 
   // ================================================================ 地圖
@@ -266,8 +278,12 @@ export class BattleScene extends Phaser.Scene {
     this.warns = [];
 
     const key = `ground-${id}`;
-    if (!this.textures.exists(key)) this.paintGround(key);
+    // 換地圖時把上一張大地面貼圖丟掉，手機 GPU 記憶體比較不會爆（爆了就會黑屏）
+    const oldKey = this.ground?.texture.key;
     this.ground?.destroy();
+    this.ground = undefined;
+    if (oldKey && oldKey !== key && this.textures.exists(oldKey)) this.textures.remove(oldKey);
+    if (!this.textures.exists(key)) this.paintGround(key);
     this.ground = this.add.image(0, 0, key).setOrigin(0).setDepth(DEPTH.ground);
     this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H);
     this.setView(1, WORLD_W / 2, WORLD_H / 2, WORLD_W / 2, WORLD_H / 2);
@@ -644,6 +660,7 @@ export class BattleScene extends Phaser.Scene {
   // ================================================================ 每一格
 
   update(_t: number, deltaMs: number) {
+    this.lastFrame = performance.now();
     const dt = Math.min(0.1, deltaMs / 1000);
     this.clock += dt;
     const s = session.state;
