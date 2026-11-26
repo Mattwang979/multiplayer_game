@@ -5,6 +5,8 @@ import {
   BOMB,
   BUILD_SLOTS,
   FACTIONS,
+  FORT_SPEC_DEFS,
+  type FortSpec,
   WORLD_H,
   WORLD_W,
   buildMap,
@@ -45,8 +47,11 @@ const FORMATION: Record<string, [number, number][]> = {
   artillery: [[-24, -11], [-26, 11]],
   engineer: [[3, -6], [-4, 6]],
   medic: [[3, -6], [-4, 6]],
+  sniper: [[0, 0]],
+  flame: [[3, -6], [-4, 6]],
 };
-const MAN_TEX: Record<string, string> = { engineer: "engineer", medic: "medic" };
+const MAN_TEX: Record<string, string> = { engineer: "engineer", medic: "medic", sniper: "sniper", flame: "flame" };
+const VEHICLE_TEX: Record<string, string> = { car: "car", flak: "flakv" };
 
 /**
  * 按下去之後的狀態：
@@ -91,6 +96,7 @@ interface UnitView {
 }
 
 interface StructView {
+  building: boolean; // 施工中
   img: Phaser.GameObjects.Image;
   gun?: Phaser.GameObjects.Image;
   shots: number;
@@ -138,6 +144,12 @@ export class BattleScene extends Phaser.Scene {
   private slots: { img: Phaser.GameObjects.Image; lane: number; node: number; slot: number; wx: number; wy: number }[] = [];
   private slotKey = "";
   private markers: { img: Phaser.GameObjects.Image; until: number }[] = [];
+  private crates = new Map<string, { img: Phaser.GameObjects.Image; chute: Phaser.GameObjects.Image }>();
+  private warns: { x: number; y: number; start: number; until: number }[] = [];
+  private weather!: Phaser.GameObjects.Graphics;
+  private warnG!: Phaser.GameObjects.Graphics;
+  private nextThunder = 0;
+  private airShotsSeen = new Map<string, number>();
   private wrecks: { img: Phaser.GameObjects.Image; until: number }[] = [];
   private crosshair!: Phaser.GameObjects.Image;
   private preview!: Phaser.GameObjects.Graphics;
@@ -164,6 +176,8 @@ export class BattleScene extends Phaser.Scene {
     this.bars = this.add.graphics().setDepth(DEPTH.bars);
     this.crosshair = this.add.image(0, 0, "target").setDepth(DEPTH.overlay).setVisible(false);
     this.preview = this.add.graphics().setDepth(DEPTH.overlay);
+    this.weather = this.add.graphics().setDepth(DEPTH.airFx + 2);
+    this.warnG = this.add.graphics().setDepth(DEPTH.overlay - 1);
     this.previewText = this.add
       .text(0, 0, "", {
         fontFamily: '"Noto Sans TC", sans-serif',
@@ -194,6 +208,13 @@ export class BattleScene extends Phaser.Scene {
 
     this.offs.push(
       bus.on("bomb", (m: { lane: number; x: number }) => this.onBomb(m)),
+      bus.on("barrageMark", (m: { lane: number; x: number; delay: number }) => this.onBarrageMark(m)),
+      bus.on("crateTaken", (m: { id: string; lane: number; x: number; faction: number }) => this.onCrateTaken(m)),
+      bus.on("built", (m: { id: string }) => this.onBuilt(m)),
+      bus.on("converted", (m: { node: number }) => {
+        const nd = this.map?.nodes[m.node];
+        if (nd) this.fx.dustRing(nd.x, nd.y, 1.4);
+      }),
       bus.on("airDown", (m: { x: number; y: number; angle: number; kind: AirKind; faction: number }) => this.onAirDown(m)),
       bus.on("airIncoming", (m: { lane: number; x: number; kind: AirKind }) => this.onAirIncoming(m)),
       bus.on("eliminated", (m: { node: number }) => this.onEliminated(m)),
@@ -237,6 +258,12 @@ export class BattleScene extends Phaser.Scene {
     this.slots.forEach((s) => s.img.destroy());
     this.slots = [];
     this.slotKey = "";
+    this.crates.forEach((c) => {
+      c.img.destroy();
+      c.chute.destroy();
+    });
+    this.crates.clear();
+    this.warns = [];
 
     const key = `ground-${id}`;
     if (!this.textures.exists(key)) this.paintGround(key);
@@ -634,6 +661,9 @@ export class BattleScene extends Phaser.Scene {
       this.drawBars();
       this.updateSlots();
       this.updateMarkers();
+      this.syncCrates();
+      this.drawWarnings();
+      this.drawWeather(dt);
     } catch (e) {
       console.error(e); // 單一格出錯不要讓整個畫面停掉
     }
@@ -654,7 +684,8 @@ export class BattleScene extends Phaser.Scene {
       const nd = this.map.nodes[i];
       const owned = !!n.owner && n.hp > 0;
       const owner = owned ? s.players.get(n.owner) : undefined;
-      const tex = owned ? (n.kind === "hq" ? `hq${n.faction}` : `fort${n.faction}`) : "fortNeutral";
+      const specOn = owned && n.spec && s.time >= n.specAt ? n.spec : "";
+      const tex = owned ? (n.kind === "hq" ? `hq${n.faction}` : specOn ? `fort${n.faction}_${specOn}` : `fort${n.faction}`) : "fortNeutral";
       const mine = owner?.id === session.myId;
       let label =
         owned && n.kind === "hq" && owner
@@ -663,6 +694,9 @@ export class BattleScene extends Phaser.Scene {
             : `${FACTIONS[owner.faction].name}・${owner.name}${mine ? "（你）" : ""}`
           : nd.name;
       if (owned && n.kind === "hq" && owner && owner.id === s.leaderId) label = `懸賞・${label}`;
+      if (specOn) label += `・${FORT_SPEC_DEFS[specOn as Exclude<FortSpec, "">].name}`;
+      const converting = owned && n.spec ? Math.ceil(n.specAt - s.time) : 0;
+      if (converting > 0) label += ` 改建${converting}`;
       const grace = owned ? Math.ceil(n.incomeAt - s.time) : 0;
       if (grace > 0) label += ` 整頓${grace}`;
       const key = `${tex}|${label}`;
@@ -715,13 +749,16 @@ export class BattleScene extends Phaser.Scene {
     const shadow = this.add
       .image(0, 0, "shadow")
       .setDepth(DEPTH.unitShadow)
-      .setScale((u.type === "tank" ? 1 : 0.7) * (this.unitScale / UNIT_SCALE_DESKTOP));
+      .setScale((u.type === "tank" ? 1 : VEHICLE_TEX[u.type] ? 0.85 : 0.7) * (this.unitScale / UNIT_SCALE_DESKTOP));
     const men: Phaser.GameObjects.Image[] = [];
     const v: UnitView = { c, men, shadow, x: u.x, lane: u.lane, shots: u.shots, hp: u.hp, maxHp: u.maxHp, type: u.type, wx: 0, wy: 0, angle: 0 };
     if (u.type === "tank") {
       v.gun = this.add.image(0, 0, `tank${f}`);
       v.turret = this.add.image(-2, 0, `turret${f}`).setOrigin(12 / 48, 0.5);
       c.add([v.gun, v.turret]);
+    } else if (VEHICLE_TEX[u.type]) {
+      v.gun = this.add.image(0, 0, `${VEHICLE_TEX[u.type]}${f}`);
+      c.add(v.gun);
     } else {
       if (u.type === "mg") v.gun = this.add.image(8, 0, "mggun");
       if (u.type === "at") v.gun = this.add.image(4, 0, `atgun${f}`);
@@ -804,6 +841,15 @@ export class BattleScene extends Phaser.Scene {
         v.shots = u.shots;
         this.unitFired(v, u);
       }
+      if (u.type === "flak") {
+        const seenShots = this.airShotsSeen.get(u.id);
+        if (seenShots !== undefined && seenShots !== u.airShots) {
+          this.fx.flak(u.ax, u.ay);
+          this.fx.tracer(v.wx, v.wy, u.ax, u.ay);
+          play("flak", this.volumeAt(u.ax, u.ay) * 0.5);
+        }
+        this.airShotsSeen.set(u.id, u.airShots);
+      }
     });
     for (const [id, v] of this.units) {
       if (seen.has(id)) continue;
@@ -841,6 +887,32 @@ export class BattleScene extends Phaser.Scene {
           this.fx.spawn("wrench", tp.x + rnd(-8, 8), tp.y + rnd(-8, 8), { life: 0.7, s0: 1, s1: 1.2, a0: 1, a1: 0, rise: 18, vr: 4, depth: DEPTH.overlay });
           for (let k = 0; k < 4; k++) this.fx.spawn("spark", tp.x, tp.y, { life: 0.3, s0: 1, s1: 0.4, vx: rnd(-60, 60), vy: rnd(-60, 20), tint: 0xffd34a, depth: DEPTH.overlay });
         }
+        break;
+      case "sniper":
+        this.fx.muzzle(mx + 6, my, v.angle, 0.8);
+        this.fx.tracer(mx + 6, my, tp.x, tp.y);
+        this.fx.impact(tp.x, tp.y, 0.8);
+        play("sniper", vol);
+        break;
+      case "flame": {
+        // 火焰：沿著噴射方向一串火球
+        const steps = 7;
+        for (let k = 1; k <= steps; k++) {
+          const t = k / steps;
+          this.fx.spawn("puff", mx + (tp.x - mx) * t + rnd(-4, 4), my + (tp.y - my) * t + rnd(-4, 4), {
+            life: 0.25 + t * 0.25, s0: 0.12 + t * 0.12, s1: 0.3 + t * 0.25, a0: 1, a1: 0, fade: 0.5, tints: FIRE_RAMP, depth: DEPTH.groundFx,
+          });
+        }
+        this.fx.spawn("smokepuff", tp.x, tp.y, { life: 0.9, s0: 0.15, s1: 0.4, a0: 0.5, a1: 0, rise: 14, depth: DEPTH.groundFx - 1 });
+        play("flame", vol * 0.7);
+        break;
+      }
+      case "car":
+      case "flak":
+        this.fx.muzzle(mx + 10, my, v.angle, 0.7);
+        this.fx.tracer(mx + 10, my, tp.x, tp.y);
+        this.fx.impact(tp.x, tp.y, 0.5);
+        play("mg", vol * 0.45);
         break;
       case "rifle":
       case "para":
@@ -924,6 +996,10 @@ export class BattleScene extends Phaser.Scene {
       this.wrecks.push({ img: w, until: this.clock + 22 });
       this.fx.burn(v.wx, v.wy, 7);
       play("boom", vol);
+    } else if (VEHICLE_TEX[v.type]) {
+      this.fx.explosion(v.wx, v.wy, 0.9);
+      this.fx.burn(v.wx, v.wy, 4);
+      play("boom", vol * 0.8);
     } else if (v.type === "at" || v.type === "artillery") {
       this.fx.explosion(v.wx, v.wy, 0.6);
       play("boom", vol * 0.6);
@@ -944,6 +1020,15 @@ export class BattleScene extends Phaser.Scene {
       if (!v) {
         v = this.makeStructure(st);
         this.structs.set(st.id, v);
+      }
+      const building = st.progress < 1;
+      if (building !== v.building) v.building = building;
+      v.img.setAlpha(building ? 0.45 + st.progress * 0.35 : 1);
+      v.gun?.setAlpha(building ? 0.45 : 1);
+      if (building && Math.random() < 0.04) {
+        // 施工中：敲打的火花和塵土
+        this.fx.spawn("spark", v.wx + rnd(-10, 10), v.wy + rnd(-10, 10), { life: 0.3, s0: 1, s1: 0.4, vx: rnd(-40, 40), vy: rnd(-50, 0), tint: 0xffd34a, depth: DEPTH.overlay });
+        this.fx.spawn("dust", v.wx + rnd(-12, 12), v.wy + rnd(-12, 12), { life: 0.6, s0: 0.15, s1: 0.35, a0: 0.5, a1: 0, depth: DEPTH.decal + 1 });
       }
       if (st.shots !== v.shots) {
         v.shots = st.shots;
@@ -993,7 +1078,7 @@ export class BattleScene extends Phaser.Scene {
       .setDepth(DEPTH.structure)
       .setRotation(st.kind === "aa" ? 0 : angle)
       .setScale(M() ? 1.35 : 1);
-    const v: StructView = { img, shots: st.shots, airShots: st.airShots, hp: st.hp, maxHp: st.maxHp, kind: st.kind, wx: p.x, wy: p.y };
+    const v: StructView = { building: st.progress < 1, img, shots: st.shots, airShots: st.airShots, hp: st.hp, maxHp: st.maxHp, kind: st.kind, wx: p.x, wy: p.y };
     if (st.kind === "aa") {
       v.gun = this.add
         .image(p.x, p.y, "aagun")
@@ -1296,7 +1381,21 @@ export class BattleScene extends Phaser.Scene {
       const r = v.maxHp > 0 ? v.hp / v.maxHp : 0;
       if (r < 0.999) bar(v.wx, v.wy - 22 * (this.unitScale / UNIT_SCALE_DESKTOP), M() ? 34 : 22, r, hpColor(r));
     });
-    this.structs.forEach((v) => {
+    this.structs.forEach((v, id) => {
+      const st = s.structures.get(id);
+      if (st && st.progress < 1) {
+        // 施工：虛線框＋黃色進度條
+        const half = M() ? 26 : 20;
+        g.lineStyle(2, 0xf2c14e, 0.9);
+        for (let k = -half; k < half; k += 8) {
+          g.lineBetween(v.wx + k, v.wy - half, v.wx + Math.min(half, k + 4), v.wy - half);
+          g.lineBetween(v.wx + k, v.wy + half, v.wx + Math.min(half, k + 4), v.wy + half);
+          g.lineBetween(v.wx - half, v.wy + k, v.wx - half, v.wy + Math.min(half, k + 4));
+          g.lineBetween(v.wx + half, v.wy + k, v.wx + half, v.wy + Math.min(half, k + 4));
+        }
+        bar(v.wx, v.wy - half - 10, 40, st.progress, 0xf2c14e);
+        return;
+      }
       const r = v.maxHp > 0 ? v.hp / v.maxHp : 0;
       if (r < 0.999) bar(v.wx, v.wy - 30, 34, r, hpColor(r));
     });
@@ -1355,6 +1454,123 @@ export class BattleScene extends Phaser.Scene {
     for (const sl of this.slots) {
       const taken = s.structures.get(`s${sl.lane}_${sl.node}_${sl.slot}`);
       sl.img.setVisible(!taken).setAlpha(0.6 + Math.sin(this.clock * 4) * 0.25);
+    }
+  }
+
+  private onBuilt(m: { id: string }) {
+    const v = this.structs.get(m.id);
+    if (!v) return;
+    this.fx.dustRing(v.wx, v.wy, 1);
+    this.fx.spawn("ring", v.wx, v.wy, { life: 0.5, s0: 0.2, s1: 0.8, a0: 1, a1: 0, tint: 0xf2c14e, depth: DEPTH.overlay });
+    play("deploy", this.volumeAt(v.wx, v.wy) * 0.6);
+  }
+
+  /** 補給箱：降落傘吊著落下，落地後閃著等人撿 */
+  private syncCrates() {
+    const s = session.state!;
+    const seen = new Set<string>();
+    s.crates?.forEach((c) => {
+      seen.add(c.id);
+      const lane = this.map.lanes[c.lane];
+      if (!lane) return;
+      const p = lanePoint(lane, c.x);
+      let v = this.crates.get(c.id);
+      if (!v) {
+        v = {
+          img: this.add.image(p.x, p.y, "crate").setDepth(DEPTH.unit + 1).setScale(M() ? 1.5 : 1.1),
+          chute: this.add.image(p.x, p.y, "chute").setDepth(DEPTH.air - 1),
+        };
+        this.crates.set(c.id, v);
+        play("plane", 0.5);
+      }
+      const left = c.landT - s.time;
+      if (left > 0) {
+        const k = Math.min(1, left / 2.5);
+        v.img.setPosition(p.x, p.y - 70 * k).setAlpha(1);
+        v.chute.setVisible(true).setPosition(p.x, p.y - 70 * k - 22).setScale((M() ? 1.3 : 1) * (0.7 + 0.3 * k)).setRotation(Math.sin(this.clock * 2) * 0.15);
+      } else {
+        if (v.chute.visible) {
+          v.chute.setVisible(false);
+          this.fx.dustRing(p.x, p.y, 0.8);
+        }
+        v.img.setPosition(p.x, p.y - Math.abs(Math.sin(this.clock * 4)) * 4);
+      }
+    });
+    for (const [id, v] of this.crates) {
+      if (seen.has(id)) continue;
+      v.img.destroy();
+      v.chute.destroy();
+      this.crates.delete(id);
+    }
+    // 落地的補給箱外圍閃金圈
+    s.crates?.forEach((c) => {
+      if (c.landT > s.time) return;
+      const p = lanePoint(this.map.lanes[c.lane], c.x);
+      const r = (M() ? 30 : 24) + Math.sin(this.clock * 5) * 4;
+      this.bars.lineStyle(3, 0xf2c14e, 0.85);
+      this.bars.strokeCircle(p.x, p.y, r);
+    });
+  }
+
+  private onCrateTaken(m: { id: string; lane: number; x: number; faction: number }) {
+    const lane = this.map?.lanes[m.lane];
+    if (!lane) return;
+    const p = lanePoint(lane, m.x);
+    this.fx.spawn("ring", p.x, p.y, { life: 0.6, s0: 0.2, s1: 1.1, a0: 1, a1: 0, tint: 0xf2c14e, depth: DEPTH.overlay });
+    for (let k = 0; k < 10; k++) {
+      this.fx.spawn("spark", p.x, p.y, { life: 0.6, s0: 1.2, s1: 0.4, vx: rnd(-90, 90), vy: rnd(-120, -20), tint: 0xf2c14e, depth: DEPTH.overlay });
+    }
+    play("capture", 0.4);
+  }
+
+  /** 砲擊彈幕：落彈前的紅圈 */
+  private onBarrageMark(m: { lane: number; x: number; delay: number }) {
+    const lane = this.map?.lanes[m.lane];
+    if (!lane) return;
+    const p = lanePoint(lane, m.x);
+    this.warns.push({ x: p.x, y: p.y, start: this.clock, until: this.clock + m.delay });
+    play("whistle", this.volumeAt(p.x, p.y) * 0.5);
+  }
+
+  private drawWarnings() {
+    const g = this.warnG;
+    g.clear();
+    this.warns = this.warns.filter((w) => w.until > this.clock);
+    for (const w of this.warns) {
+      const t = (this.clock - w.start) / (w.until - w.start);
+      const r = 40 * (M() ? 1.1 : 1);
+      g.fillStyle(0xff3b2f, 0.12 + t * 0.2);
+      g.fillCircle(w.x, w.y, r);
+      g.lineStyle(3, 0xff3b2f, 0.6 + Math.sin(this.clock * 20) * 0.3);
+      g.strokeCircle(w.x, w.y, r);
+      g.lineStyle(3, 0xffffff, 0.9);
+      g.strokeCircle(w.x, w.y, r * (1 - t));
+    }
+  }
+
+  /** 暴風雨：畫面變暗、斜雨、偶爾打雷 */
+  private drawWeather(_dt: number) {
+    const g = this.weather;
+    g.clear();
+    const s = session.state!;
+    if (s.event !== "storm") return;
+    const view = this.cameras.main.worldView;
+    g.fillStyle(0x1b2430, 0.28);
+    g.fillRect(view.x, view.y, view.width, view.height);
+    g.lineStyle(2, 0xd6e4f0, 0.45);
+    const n = 160;
+    for (let i = 0; i < n; i++) {
+      const seed = i * 97.13;
+      const x = view.x + ((seed * 13.7 + this.clock * 340) % view.width);
+      const y = view.y + ((seed * 7.3 + this.clock * 900 + i * 31) % view.height);
+      g.lineBetween(x, y, x - 8, y + 22);
+    }
+    if (this.clock > this.nextThunder) {
+      if (this.nextThunder > 0) {
+        this.cameras.main.flash(120, 230, 235, 255);
+        play("bigboom", 0.35);
+      }
+      this.nextThunder = this.clock + 5 + Math.random() * 7;
     }
   }
 

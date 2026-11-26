@@ -45,6 +45,8 @@ export const MapNode = schema(
     capFaction: t.int8().default(-1),
     progress: t.float32().default(0), // 佔領進度 0~1
     incomeAt: t.float32().default(0), // 剛佔下來時，到這個時間才開始產錢
+    spec: t.string().default(""), // 改建成什麼（"" = 標準堡壘）
+    specAt: t.float32().default(0), // 改建完成的時間
     shots: t.uint8().default(0),
     tl: t.int8().default(0), // 最近一次射擊目標所在的路
     tx: t.float32().default(0),
@@ -54,6 +56,7 @@ export const MapNode = schema(
 
     cooldownLeft: t.number().noSync().default(0),
     airCooldownLeft: t.number().noSync().default(0),
+    specDone: t.boolean().noSync().default(true), // 改建效果（血量上限）是否已經套用
   },
   "MapNode",
 );
@@ -84,8 +87,12 @@ export const Unit = schema(
     destLane: t.int8().default(-1),
     destX: t.float32().default(0),
     route: t.array("uint8"), // 之後要走的路
+    airShots: t.uint8().default(0), // 防空砲車對空射擊
+    ax: t.float32().default(0),
+    ay: t.float32().default(0),
 
     cooldownLeft: t.number().noSync().default(0),
+    airCooldownLeft: t.number().noSync().default(0),
     departAt: t.number().noSync().default(0), // 排隊出門的時間（0 = 沒有要出門）
   },
   "Unit",
@@ -111,6 +118,7 @@ export const Structure = schema(
     airShots: t.uint8().default(0),
     ax: t.float32().default(0),
     ay: t.float32().default(0),
+    progress: t.float32().default(1), // 施工進度 0~1（1 = 蓋好）
 
     cooldownLeft: t.number().noSync().default(0),
     airCooldownLeft: t.number().noSync().default(0),
@@ -141,6 +149,18 @@ export const Aircraft = schema(
 );
 export type Aircraft = SchemaType<typeof Aircraft>;
 
+/** 隨機事件「補給空投」的補給箱 */
+export const Crate = schema(
+  {
+    id: t.string().default(""),
+    lane: t.uint8().default(0),
+    x: t.float32().default(0),
+    landT: t.float32().default(0), // 落地時間（之前還在降落傘上）
+  },
+  "Crate",
+);
+export type Crate = SchemaType<typeof Crate>;
+
 export const BattleState = schema(
   {
     phase: t.string().default("lobby"),
@@ -158,6 +178,9 @@ export const BattleState = schema(
     aircraft: t.map(Aircraft),
     fronts: t.array("float32"), // 每條路上雙方交戰的位置（畫面用）
     leaderId: t.string().default(""), // 被懸賞的領先者
+    event: t.string().default(""), // 進行中的隨機事件
+    eventEnd: t.float32().default(0),
+    crates: t.map(Crate),
   },
   "BattleState",
 );

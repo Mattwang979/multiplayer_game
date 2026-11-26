@@ -45,6 +45,8 @@ export interface NodeState {
   capFaction: number;
   progress: number;
   incomeAt: number;
+  spec: string;
+  specAt: number;
   shots: number;
   tl: number;
   tx: number;
@@ -77,6 +79,9 @@ export interface UnitState {
   destLane: number;
   destX: number;
   route: ArrayLike<number>;
+  airShots: number;
+  ax: number;
+  ay: number;
 }
 
 export interface StructureState {
@@ -96,6 +101,7 @@ export interface StructureState {
   airShots: number;
   ax: number;
   ay: number;
+  progress: number; // 施工進度 0~1
 }
 
 export interface AircraftState {
@@ -129,4 +135,14 @@ export interface GameState {
   aircraft: MapLike<AircraftState>;
   fronts: ArrayLike<number>;
   leaderId: string;
+  event: string;
+  eventEnd: number;
+  crates: MapLike<CrateState>;
+}
+
+export interface CrateState {
+  id: string;
+  lane: number;
+  x: number;
+  landT: number;
 }

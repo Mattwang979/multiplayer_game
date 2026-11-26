@@ -2,7 +2,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  BUILD_START_HP,
   CAPTURE_GRACE,
+  CONVERT_TIME,
+  DEPOT_INCOME,
+  EVENTS,
+  SUPPLY_AMOUNT,
   FORT_BREAK_BOUNTY,
   LEADER_FORT_BOUNTY_MULT,
   MAPS,
@@ -118,6 +123,12 @@ test("剋制關係：機槍組打贏一個步兵班", () => assert.equal(duel(["
 test("砲兵被削弱：三個步兵班打贏一門砲兵", () => assert.equal(duel(["rifle", 3], ["artillery", 1]), "a"));
 test("剋砲兵：一輛戰車打贏兩門砲兵", () => assert.equal(duel(["tank", 1], ["artillery", 2]), "a"));
 test("剋砲兵：機槍組打贏一門砲兵", () => assert.equal(duel(["mg", 1], ["artillery", 1]), "a"));
+test("新兵種：狙擊手打贏機槍組", () => assert.equal(duel(["sniper", 1], ["mg", 1]), "a"));
+test("新兵種：狙擊手打不過裝甲車", () => assert.equal(duel(["car", 1], ["sniper", 2]), "a"));
+test("新兵種：火焰兵打贏兩個步兵班", () => assert.equal(duel(["flame", 1], ["rifle", 2]), "a"));
+test("新兵種：裝甲車打贏兩個步兵班", () => assert.equal(duel(["car", 1], ["rifle", 2]), "a"));
+test("新兵種：反戰車砲打贏裝甲車", () => assert.equal(duel(["at", 1], ["car", 1]), "a"));
+test("新兵種：戰車打贏裝甲車", () => assert.equal(duel(["tank", 1], ["car", 1]), "a"));
 
 test("開局：每人一座大本營加兩座堡壘，大本營裡有 3 個步兵班", () => {
   const { battle, state } = setup(2, "pass");
@@ -381,6 +392,7 @@ test("防空砲會把飛機打下來", () => {
     const lane = laneBetween(battle, a, b);
     for (const slot of [0, 1]) if (battle.slotFits(lane, slot)) assert.equal(battle.build("p1", lane, 1, slot, "aa"), null);
   }
+  state.structures.forEach((st) => (st.progress = 0.999)); // 直接當作快蓋好
   const p0 = state.players.get("p0")!;
   p0.fundsExact = 1000;
   p0.airReady[0] = 0;
@@ -420,3 +432,185 @@ for (const def of MAPS) {
     });
   }
 }
+
+test("工事要施工：剛蓋時血少、不能開火，工兵在旁邊蓋得比較快", () => {
+  const timeToBuild = (engineers: number) => {
+    const { battle, state } = setup(2, "pass");
+    const lane = laneBetween(battle, 0, 7);
+    state.players.get("p0")!.fundsExact = 10000;
+    assert.equal(battle.build("p0", lane, 0, 0, "bunker"), null);
+    const st = [...state.structures.values()][0];
+    assert.ok(Math.abs(st.hp / st.maxHp - BUILD_START_HP) < 1e-6);
+    assert.equal(st.progress, 0);
+    if (engineers) {
+      const geom = battle.map.lanes[lane];
+      const at = st.x;
+      const made = place(battle, "p0", "engineer", lane, at, nodeDir(geom, 0), 7, engineers);
+      made.forEach((u) => (u.mode = "hold"));
+    }
+    let t = 0;
+    while (st.progress < 1 && t < 60) {
+      battle.step(DT);
+      t += DT;
+    }
+    assert.ok(Math.abs(st.hp - st.maxHp) < 1);
+    return t;
+  };
+  const alone = timeToBuild(0);
+  const helped = timeToBuild(2);
+  assert.ok(alone > 11 && alone < 13, `自己蓋 ${alone.toFixed(1)} 秒`);
+  assert.ok(helped < alone / 2.5, `兩個工兵幫忙 ${helped.toFixed(1)} 秒`);
+});
+
+test("施工中的碉堡不會開火", () => {
+  const { battle, state } = setup(2, "pass");
+  const lane = laneBetween(battle, 0, 7);
+  state.players.get("p0")!.fundsExact = 10000;
+  battle.build("p0", lane, 0, 0, "bunker");
+  const st = [...state.structures.values()][0];
+  const geom = battle.map.lanes[lane];
+  const [enemy] = place(battle, "p1", "rifle", lane, st.x + nodeDir(geom, 0) * 60, nodeDir(geom, 0) === 1 ? -1 : 1, 0, 1);
+  enemy.mode = "hold";
+  run(battle, 3);
+  assert.equal(st.shots, 0);
+});
+
+test("防空砲車會打下轟炸機", () => {
+  const { battle, state, events } = setup(2, "pass");
+  const lane = laneBetween(battle, 7, 1);
+  const geom = battle.map.lanes[lane];
+  const flak = place(battle, "p1", "flak", lane, geom.len - 80, -1, 1, 3);
+  flak.forEach((u) => (u.mode = "hold"));
+  const p0 = state.players.get("p0")!;
+  p0.fundsExact = 1000;
+  p0.airReady[0] = 0;
+  state.time = 40;
+  assert.equal(battle.callAir("p0", "bomber", lane, geom.len - 80), null);
+  run(battle, 10);
+  assert.ok(events.some((e) => e.type === "airDown"), "轟炸機應該被防空砲車擊落");
+});
+
+test("堡壘改建：要 10 秒，補給站多產錢、兵營多住兵又打折、被攻破就變回標準", () => {
+  const { battle, state, events } = setup(2, "pass");
+  const p0 = state.players.get("p0")!;
+  p0.fundsExact = 10000;
+  assert.equal(battle.convert("p0", 0, "depot"), "大本營不能改建");
+  assert.equal(battle.convert("p0", 4, "depot"), "只能改建自己的堡壘");
+  run(battle, 1);
+  const before = p0.income;
+  assert.equal(battle.convert("p0", 2, "depot"), null);
+  run(battle, CONVERT_TIME - 1);
+  assert.equal(p0.income, before, "改建完成前沒有效果");
+  run(battle, 2);
+  assert.ok(events.some((e) => e.type === "converted" && e.payload.node === 2));
+  assert.ok(Math.abs(p0.income - before - DEPOT_INCOME) < 0.11);
+  assert.ok(state.nodes[2].maxHp < 1500);
+
+  assert.equal(battle.convert("p0", 3, "barracks"), null);
+  run(battle, CONVERT_TIME + 0.5);
+  assert.equal(battle.garrisonCapAt(3), 20);
+  assert.equal(battle.unitPrice("tank", 3), Math.round(220 * 0.85));
+  // 被攻破 → 變回標準
+  state.nodes[3].hp = 0;
+  run(battle, DT);
+  assert.equal(state.nodes[3].spec, "");
+  assert.equal(battle.garrisonCapAt(3), 12);
+});
+
+test("堡壘改建：砲台打得比標準堡壘痛", () => {
+  const dmg = (spec: "" | "battery") => {
+    const { battle, state } = setup(2, "pass");
+    state.players.get("p0")!.fundsExact = 10000;
+    if (spec) battle.convert("p0", 2, spec);
+    run(battle, CONVERT_TIME + 0.5);
+    state.units.forEach((u) => state.units.delete(u.id));
+    const lane = laneBetween(battle, 2, 6);
+    const geom = battle.map.lanes[lane];
+    const [tank] = place(battle, "p1", "tank", lane, nodeEnd(geom, 2) + nodeDir(geom, 2) * 150, nodeDir(geom, 2) === 1 ? -1 : 1, 2, 1);
+    tank.mode = "hold";
+    tank.hp = tank.maxHp = 100000;
+    run(battle, 5);
+    return 100000 - tank.hp;
+  };
+  const plain = dmg("");
+  const battery = dmg("battery");
+  assert.ok(battery > plain * 1.5, `砲台 ${battery.toFixed(0)} vs 標準 ${plain.toFixed(0)}`);
+});
+
+test("隨機事件：補給箱被部隊撿到給錢", () => {
+  const { battle, state, events } = setup(2, "pass");
+  battle.startEvent("supply");
+  assert.equal(state.event, "supply");
+  assert.equal(state.crates.size, 2);
+  const c = [...state.crates.values()][0];
+  run(battle, 3);
+  const p0 = state.players.get("p0")!;
+  const before = p0.fundsExact;
+  const [u] = place(battle, "p0", "rifle", c.lane, c.x, 1, 7, 1);
+  u.mode = "hold";
+  run(battle, DT * 2);
+  assert.ok(events.some((e) => e.type === "crateTaken" && e.payload.by === "p0"));
+  assert.ok(p0.fundsExact - before >= SUPPLY_AMOUNT - 1 - 60);
+  assert.equal(state.crates.size, 1);
+});
+
+test("隨機事件：暴風雨不能叫飛機、結束後恢復", () => {
+  const { battle, state } = setup(2, "pass");
+  const p0 = state.players.get("p0")!;
+  p0.fundsExact = 1000;
+  p0.airReady[0] = 0;
+  state.time = 40;
+  battle.startEvent("storm");
+  assert.equal(battle.callAir("p0", "bomber", 0, 100), "暴風雨中飛機無法起飛");
+  run(battle, EVENTS.storm.duration + 1);
+  assert.equal(state.event, "");
+  assert.equal(battle.callAir("p0", "bomber", 0, 100), null);
+});
+
+test("隨機事件：砲擊彈幕會炸到部隊", () => {
+  const { battle, state, events } = setup(2, "pass");
+  const lane = laneBetween(battle, 0, 7);
+  const guys = place(battle, "p0", "rifle", lane, 300, 1, 7, 4);
+  guys.forEach((u) => (u.mode = "hold"));
+  battle.startEvent("barrage");
+  run(battle, EVENTS.barrage.duration);
+  assert.ok(events.filter((e) => e.type === "barrageMark").length >= 8);
+  assert.ok(guys.some((u) => u.hp < u.maxHp || !state.units.has(u.id)), "彈幕應該打到人");
+});
+
+test("隨機事件：援軍給堡壘最少的人", () => {
+  const { battle, state } = setup(2, "pass");
+  state.nodes[6].owner = "p1";
+  state.nodes[6].faction = 1;
+  state.nodes[6].hp = 1000;
+  run(battle, DT);
+  const before = battle.garrisonUnits("p0", 0).length;
+  const beforeP1 = battle.garrisonUnits("p1", 1).length;
+  battle.startEvent("reinforce");
+  assert.equal(battle.garrisonUnits("p0", 0).length, before + 3);
+  assert.equal(battle.garrisonUnits("p1", 1).length, beforeP1);
+});
+
+test("隨機事件：燃料短缺時戰車變慢、戰功懸賞時賞金加倍", () => {
+  const speed = (event: "" | "fuel") => {
+    const { battle } = setup(2, "pass");
+    const lane = laneBetween(battle, 0, 7);
+    const geom = battle.map.lanes[lane];
+    const [t] = place(battle, "p0", "tank", lane, nodeEnd(geom, 0) + nodeDir(geom, 0) * 100, nodeDir(geom, 0), 7, 1);
+    if (event) battle.startEvent(event);
+    const x0 = t.x;
+    run(battle, 3);
+    return Math.abs(t.x - x0);
+  };
+  assert.ok(speed("fuel") < speed("") * 0.6);
+
+  const { battle, state } = setup(2, "pass");
+  battle.startEvent("bounty");
+  const p1 = state.players.get("p1")!;
+  const [victim] = place(battle, "p0", "tank", laneBetween(battle, 0, 7), 300, 1, 7, 1);
+  (battle as any).lastHit.set(victim.id, "p1");
+  victim.hp = 0;
+  const before = p1.fundsExact;
+  run(battle, DT);
+  assert.ok(p1.fundsExact - before > 220 * 0.2 * 2 - 1);
+});

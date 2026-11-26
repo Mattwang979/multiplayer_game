@@ -13,9 +13,38 @@ import {
   BASE_INCOME,
   BIG_FORT_INCOME,
   BOMB,
+  BARRACKS_CAP,
+  BARRACKS_DISCOUNT,
+  BARRAGE,
+  BATTERY_CAP,
+  BATTERY_DAMAGE,
+  BATTERY_RANGE,
+  BOUNTY_EVENT_MULT,
   BOUNTY_RATIO,
   BUILD_KINDS,
   BUILD_SLOTS,
+  BUILD_START_HP,
+  CONVERT_TIME,
+  CRATE_LAND_TIME,
+  CRATE_RADIUS,
+  DEPOT_HP,
+  DEPOT_INCOME,
+  ENGINEER_BUILD_BONUS,
+  ENGINEER_BUILD_MAX,
+  ENGINEER_BUILD_RANGE,
+  EVENTS,
+  EVENT_FIRST,
+  EVENT_GAP,
+  EVENT_KINDS,
+  FLAK_FORT_AIR,
+  FLAK_FORT_RANGE,
+  FORT_SPECS,
+  FORT_SPEC_DEFS,
+  FUEL_SPEED,
+  HOSPITAL_HEAL,
+  HOSPITAL_RANGE,
+  STORM_RANGE,
+  SUPPLY_AMOUNT,
   CAPTURE_GRACE,
   CAPTURE_HP,
   CAPTURE_RADIUS,
@@ -68,6 +97,8 @@ import {
   type ArmorClass,
   type BuildKind,
   type Dest,
+  type EventKind,
+  type FortSpec,
   type MapLayout,
   type RoutePlan,
   type RouteStart,
@@ -76,7 +107,7 @@ import {
   type UpgradeKind,
   type WeaponClass,
 } from "@frontline/shared";
-import { Aircraft, MapNode, Player, Structure, Unit, type BattleState } from "./schema";
+import { Aircraft, Crate, MapNode, Player, Structure, Unit, type BattleState } from "./schema";
 
 type EventSink = (type: string, payload: unknown) => void;
 
@@ -110,6 +141,10 @@ export class Battle {
   private lastHit = new Map<string, string>(); // 目標 id → 最後打中它的玩家（算賞金）
   private hqAlerted = new Map<string, number>();
   private nextRelease = new Map<number, number>(); // 據點 → 下一支部隊可以出門的時間
+  private nextEvent = EVENT_FIRST;
+  private lastEvent: EventKind | "" = "";
+  private nextShell = 0;
+  private shells: { lane: number; x: number; at: number }[] = [];
   private tally: Tally = { garrison: [], pop: new Map(), garrisonPop: new Map() };
 
   constructor(
@@ -148,6 +183,12 @@ export class Battle {
     this.nextRelease.clear();
     this.nextId = 1;
     s.leaderId = "";
+    s.event = "";
+    s.eventEnd = 0;
+    s.crates.clear();
+    this.shells = [];
+    this.lastEvent = "";
+    this.nextEvent = EVENT_FIRST + this.rng() * 15;
 
     this.map.nodes.forEach((nd) => {
       const owner = nd.slot >= 0 ? slotPlayer.get(nd.slot) : undefined;
@@ -200,9 +241,10 @@ export class Battle {
     const want = Math.max(1, Math.min(10, Math.floor(Number(count) || 1)));
     this.updateTally();
     const n = this.state.nodes[node];
-    const room = Math.floor((this.garrisonCap(n.kind) - (this.tally.garrison[node] ?? 0)) / def.pop);
+    const room = Math.floor((this.garrisonCapAt(node) - (this.tally.garrison[node] ?? 0)) / def.pop);
     const popRoom = Math.floor((POP_CAP - (this.tally.pop.get(p.id) ?? 0)) / def.pop);
-    const afford = Math.floor(p.fundsExact / def.cost);
+    const price = this.unitPrice(type, node);
+    const afford = Math.floor(p.fundsExact / price);
     const k = Math.min(want, room, popRoom, afford);
     if (k <= 0) {
       if (room <= 0) return "這座據點住滿了，先把兵派出去";
@@ -210,7 +252,7 @@ export class Battle {
       return "軍費不足";
     }
     for (let i = 0; i < k; i++) this.addUnit(p, type, { node });
-    this.pay(p, def.cost * k);
+    this.pay(p, price * k);
     p.deployed += k;
     this.updateTally();
     return null;
@@ -362,10 +404,66 @@ export class Battle {
     st.node = node;
     st.slot = slot;
     st.x = nodeEnd(geom, node) + nodeDir(geom, node) * BUILD_SLOTS[slot];
-    st.hp = st.maxHp = def.hp * this.armorMult(p);
+    st.maxHp = def.hp * this.armorMult(p);
+    st.hp = st.maxHp * BUILD_START_HP;
+    st.progress = 0; // 要施工一段時間才能用
     this.state.structures.set(id, st);
     this.pay(p, def.cost);
     return null;
+  }
+
+  /** 堡壘改建：砲台、兵營、補給站、防空要塞、野戰醫院（大本營不能改） */
+  convert(playerId: string, node: number, spec: FortSpec): string | null {
+    const p = this.activePlayer(playerId);
+    if (!p) return "現在不能下指令";
+    if (!this.owns(playerId, node)) return "只能改建自己的堡壘";
+    const n = this.state.nodes[node];
+    if (n.kind === "hq") return "大本營不能改建";
+    if (spec !== "" && !FORT_SPECS.includes(spec)) return "沒有這種堡壘";
+    if (n.spec === spec) return "已經是這種堡壘了";
+    if (this.state.time < n.specAt) return "還在改建中";
+    const cost = spec ? FORT_SPEC_DEFS[spec].cost : 0;
+    if (p.fundsExact < cost) return "軍費不足";
+    this.pay(p, cost);
+    // 先拿掉舊的效果（補給站的血量），改建完成才套用新的
+    this.setNodeMaxHp(node, n, "");
+    n.spec = spec;
+    n.specAt = this.state.time + (spec ? CONVERT_TIME : 0);
+    n.specDone = !spec;
+    return null;
+  }
+
+  /** 改建效果生效了嗎 */
+  private specOf(n: MapNode): FortSpec {
+    return n.spec && n.specDone ? (n.spec as FortSpec) : "";
+  }
+
+  private setNodeMaxHp(_node: number, n: MapNode, spec: FortSpec) {
+    const base = STRUCTURES[n.kind as StructureKind].hp;
+    const max = base * (spec === "depot" ? DEPOT_HP : 1);
+    if (Math.abs(max - n.maxHp) < 0.01) return;
+    const ratio = n.maxHp > 0 ? n.hp / n.maxHp : 1;
+    n.maxHp = max;
+    n.hp = Math.min(max, max * ratio);
+  }
+
+  /** 據點的駐軍容量（兵營 +8、砲台 -4） */
+  garrisonCapAt(node: number) {
+    const n = this.state.nodes[node];
+    const spec = this.specOf(n);
+    return this.garrisonCap(n.kind) + (spec === "barracks" ? BARRACKS_CAP : spec === "battery" ? BATTERY_CAP : 0);
+  }
+
+  /** 在這個據點買兵的價格（兵營打折） */
+  unitPrice(type: UnitType, node: number) {
+    const n = this.state.nodes[node];
+    const cost = UNITS[type].cost;
+    return n && this.specOf(n) === "barracks" ? Math.round(cost * BARRACKS_DISCOUNT) : cost;
+  }
+
+  /** 暴風雨：所有射程 -20% */
+  private rangeMult() {
+    return this.state.event === "storm" ? STORM_RANGE : 1;
   }
 
   /** 這條路的這一格放得下工事嗎（太短的路只有第一格） */
@@ -410,6 +508,7 @@ export class Battle {
       return this.state.time < AIR_UNLOCK_TIME ? `空軍 ${AIR_UNLOCK_TIME} 秒後才能出動` : `${def.name}還在整備中`;
     }
     if (p.fundsExact < def.cost) return "軍費不足";
+    if (this.state.event === "storm") return "暴風雨中飛機無法起飛";
 
     const geom = this.map.lanes[lane];
     const tx = Math.max(20, Math.min(geom.len - 20, x));
@@ -446,6 +545,7 @@ export class Battle {
     this.updateTally();
     this.updateIncome(dt);
     this.resolveBombs();
+    this.updateEvents();
 
     const units: Unit[] = [];
     s.units.forEach((u) => units.push(u));
@@ -474,7 +574,8 @@ export class Battle {
     const bonus = new Map<string, number>();
     this.state.nodes.forEach((n) => {
       if (!n.owner || n.hp <= 0 || n.kind === "hq" || now < n.incomeAt) return;
-      bonus.set(n.owner, (bonus.get(n.owner) ?? 0) + (n.kind === "bigfort" ? BIG_FORT_INCOME : FORT_INCOME));
+      const extra = this.specOf(n) === "depot" ? DEPOT_INCOME : 0;
+      bonus.set(n.owner, (bonus.get(n.owner) ?? 0) + (n.kind === "bigfort" ? BIG_FORT_INCOME : FORT_INCOME) + extra);
     });
     this.state.players.forEach((p) => {
       if (!p.alive) {
@@ -554,27 +655,31 @@ export class Battle {
 
     // 駐軍：回血；工兵順便修據點；輪到就出門
     if (u.inNode >= 0) {
-      if (u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * GARRISON_HEAL * dt);
       const n = this.state.nodes[u.inNode];
+      const spec = n ? this.specOf(n) : "";
+      const healMult = spec === "barracks" || spec === "hospital" ? 2 : 1;
+      if (u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * GARRISON_HEAL * healMult * dt);
       if (def.repair && n && n.owner === u.owner && n.hp > 0 && n.hp < n.maxHp) n.hp = Math.min(n.maxHp, n.hp + def.repair * 0.6 * dt);
       if (u.departAt > 0 && now >= u.departAt) this.depart(u);
       return;
     }
     if (u.landT > now) return;
     u.cooldownLeft = Math.max(0, u.cooldownLeft - dt);
+    const rangeMult = this.rangeMult();
+    if (def.airDamage) this.unitAntiAir(u, def, dt, rangeMult);
 
     if (u.mode !== "retreat") {
       if (def.heal) {
         this.medicAct(u, def, units, dt);
         // 醫療兵不衝進火線：前方有敵人就停下來
-        if (this.findTarget(u, units, structures, def.range + 40)) {
+        if (this.findTarget(u, units, structures, def.range * rangeMult + 40)) {
           if (!u.attacking) u.attacking = true;
           return;
         }
       } else if (def.repair) {
         if (this.engineerAct(u, def, units, structures, dt)) return;
       } else {
-        const target = this.findTarget(u, units, structures, def.range, false, def.minRange ?? 0);
+        const target = this.findTarget(u, units, structures, def.range * rangeMult, false, def.minRange ?? 0);
         if (target) {
           this.fireAt(u, def, target, units, structures);
           return;
@@ -592,7 +697,26 @@ export class Battle {
       this.tryEnterDest(u);
       return;
     }
-    this.move(u, def.speed * (u.mode === "retreat" ? RETREAT_SPEED : 1) * dt);
+    const fuel = this.state.event === "fuel" && def.armor !== "soft" ? FUEL_SPEED : 1;
+    this.move(u, def.speed * (u.mode === "retreat" ? RETREAT_SPEED : 1) * fuel * dt);
+  }
+
+  /** 防空砲車：射程內有敵機就打 */
+  private unitAntiAir(u: Unit, def: (typeof UNITS)[UnitType], dt: number, rangeMult: number) {
+    u.airCooldownLeft = Math.max(0, u.airCooldownLeft - dt);
+    if (u.airCooldownLeft > 0) return;
+    const planes: Aircraft[] = [];
+    this.state.aircraft.forEach((a) => planes.push(a));
+    if (!planes.length) return;
+    const pos = lanePoint(this.map.lanes[u.lane], u.x);
+    const a = this.nearestEnemyPlane(u.owner, planes, pos.x, pos.y, (def.airRange ?? 0) * rangeMult);
+    if (!a) return;
+    u.airCooldownLeft = def.airCooldown ?? 0.5;
+    a.hp -= (def.airDamage ?? 0) * this.firepowerMult(u.owner);
+    this.lastHit.set(a.id, u.owner);
+    u.ax = a.x;
+    u.ay = a.y;
+    u.airShots = (u.airShots + 1) % 256;
   }
 
   private fireAt(u: Unit, def: (typeof UNITS)[UnitType], target: Target, units: Unit[], structures: Structure[]) {
@@ -632,7 +756,7 @@ export class Battle {
 
   /** 工兵：先爆破旁邊的敵方建築，其次修理己方據點、工事、戰車，最後才打步兵。回傳 true = 這格不移動 */
   private engineerAct(u: Unit, def: (typeof UNITS)[UnitType], units: Unit[], structures: Structure[], dt: number): boolean {
-    const demo = this.findTarget(u, units, structures, def.range, true);
+    const demo = this.findTarget(u, units, structures, def.range * this.rangeMult(), true);
     if (demo) {
       this.fireAt(u, def, demo, units, structures);
       return true;
@@ -640,7 +764,8 @@ export class Battle {
     const fix = this.repairTarget(u, units, structures, def.range + 20);
     if (fix) {
       if (u.attacking) u.attacking = false;
-      fix.obj.hp = Math.min(fix.obj.maxHp, fix.obj.hp + (def.repair ?? 0) * dt);
+      // 施工中的工事由 updateStructure 依附近工兵數量加速；其他的直接修血
+      if (!fix.building) fix.obj.hp = Math.min(fix.obj.maxHp, fix.obj.hp + (def.repair ?? 0) * dt);
       if (u.cooldownLeft <= 0) {
         u.cooldownLeft = 0.7;
         u.tl = fix.lane;
@@ -657,7 +782,12 @@ export class Battle {
     return false;
   }
 
-  private repairTarget(u: Unit, units: Unit[], structures: Structure[], range: number): { obj: { hp: number; maxHp: number }; lane: number; x: number } | null {
+  private repairTarget(
+    u: Unit,
+    units: Unit[],
+    structures: Structure[],
+    range: number,
+  ): { obj: { hp: number; maxHp: number }; lane: number; x: number; building?: boolean } | null {
     const geom = this.map.lanes[u.lane];
     for (const ni of [geom.a, geom.b]) {
       const n = this.state.nodes[ni];
@@ -666,11 +796,11 @@ export class Battle {
       if (Math.abs(u.x - x) <= range) return { obj: n, lane: u.lane, x };
     }
     for (const st of structures) {
-      if (st.owner !== u.owner || st.hp <= 0 || st.hp >= st.maxHp) continue;
-      if (roadDistance(this.map, u.lane, u.x, st.lane, st.x) <= range) return { obj: st, lane: st.lane, x: st.x };
+      if (st.owner !== u.owner || st.hp <= 0 || (st.hp >= st.maxHp && st.progress >= 1)) continue;
+      if (roadDistance(this.map, u.lane, u.x, st.lane, st.x) <= range) return { obj: st, lane: st.lane, x: st.x, building: st.progress < 1 };
     }
     for (const e of units) {
-      if (e.owner !== u.owner || e.type !== "tank" || e.inNode >= 0 || e.hp <= 0 || e.hp >= e.maxHp) continue;
+      if (e.owner !== u.owner || UNITS[e.type as UnitType].armor === "soft" || e.inNode >= 0 || e.hp <= 0 || e.hp >= e.maxHp) continue;
       if (roadDistance(this.map, u.lane, u.x, e.lane, e.x) <= range) return { obj: e, lane: e.lane, x: e.x };
     }
     return null;
@@ -730,9 +860,8 @@ export class Battle {
     const geom = this.map.lanes[u.lane];
     if (geom.a !== u.destNode && geom.b !== u.destNode) return;
     if (Math.abs(u.x - nodeEnd(geom, u.destNode)) > CAPTURE_RADIUS) return;
-    const n = this.state.nodes[u.destNode];
     const pop = UNITS[u.type as UnitType].pop;
-    if ((this.tally.garrison[u.destNode] ?? 0) + pop > this.garrisonCap(n.kind)) return; // 住滿了就在外面守
+    if ((this.tally.garrison[u.destNode] ?? 0) + pop > this.garrisonCapAt(u.destNode)) return; // 住滿了就在外面守
     this.tally.garrison[u.destNode] += pop;
     this.tally.garrisonPop.set(u.owner, (this.tally.garrisonPop.get(u.owner) ?? 0) + pop);
     u.inNode = u.destNode;
@@ -864,11 +993,16 @@ export class Battle {
   private updateStructure(st: Structure, units: Unit[], planes: Aircraft[], dt: number) {
     if (st.hp <= 0) return;
     const def = STRUCTURES[st.kind as StructureKind];
+    if (st.progress < 1) {
+      this.construct(st, def, units, dt);
+      return;
+    }
     const mult = this.firepowerMult(st.owner);
+    const rangeMult = this.rangeMult();
     if (def.damage > 0) {
       st.cooldownLeft = Math.max(0, st.cooldownLeft - dt);
       if (st.cooldownLeft <= 0) {
-        const t = this.nearestEnemyUnit(st.owner, units, (e) => roadDistance(this.map, st.lane, st.x, e.lane, e.x), def.range);
+        const t = this.nearestEnemyUnit(st.owner, units, (e) => roadDistance(this.map, st.lane, st.x, e.lane, e.x), def.range * rangeMult);
         if (t) {
           st.cooldownLeft = def.cooldown;
           this.hitTarget(st.owner, { kind: "unit", obj: t, lane: t.lane, x: t.x }, def.damage * mult, def.weapon);
@@ -882,7 +1016,7 @@ export class Battle {
       st.airCooldownLeft = Math.max(0, st.airCooldownLeft - dt);
       if (st.airCooldownLeft <= 0) {
         const pos = lanePoint(this.map.lanes[st.lane], st.x);
-        const a = this.nearestEnemyPlane(st.owner, planes, pos.x, pos.y, def.airRange);
+        const a = this.nearestEnemyPlane(st.owner, planes, pos.x, pos.y, def.airRange * rangeMult);
         if (a) {
           st.airCooldownLeft = def.airCooldown;
           a.hp -= def.airDamage * mult;
@@ -895,6 +1029,21 @@ export class Battle {
     }
   }
 
+  /** 工事施工：附近每個工兵 +100%（最多 +300%），據點裡駐紮的工兵每個 +50% */
+  private construct(st: Structure, def: (typeof STRUCTURES)[StructureKind], units: Unit[], dt: number) {
+    let bonus = 0;
+    for (const u of units) {
+      if (u.owner !== st.owner || u.type !== "engineer" || u.hp <= 0 || u.landT > this.state.time) continue;
+      if (u.inNode === st.node) bonus += ENGINEER_BUILD_BONUS / 2;
+      else if (u.inNode < 0 && u.mode !== "retreat" && roadDistance(this.map, u.lane, u.x, st.lane, st.x) <= ENGINEER_BUILD_RANGE) bonus += ENGINEER_BUILD_BONUS;
+    }
+    const step = (dt / (def.buildTime ?? 10)) * (1 + Math.min(ENGINEER_BUILD_MAX, bonus));
+    const next = Math.min(1, st.progress + step);
+    st.hp = Math.min(st.maxHp, st.hp + st.maxHp * (1 - BUILD_START_HP) * (next - st.progress));
+    st.progress = next;
+    if (next >= 1) this.emit("built", { id: st.id, kind: st.kind, owner: st.owner, lane: st.lane, x: st.x });
+  }
+
   private updateNode(index: number, units: Unit[], planes: Aircraft[], dt: number) {
     const n = this.state.nodes[index];
     const lanes = this.map.adj[index];
@@ -902,10 +1051,29 @@ export class Battle {
 
     if (n.owner && n.hp > 0) {
       const def = STRUCTURES[n.kind as StructureKind];
-      const mult = this.firepowerMult(n.owner) * (1 + Math.min(GARRISON_FIRE_MAX, (this.tally.garrison[index] ?? 0) * GARRISON_FIRE_BONUS));
+      // 改建完成：套用效果
+      if (n.spec && !n.specDone && this.state.time >= n.specAt) {
+        n.specDone = true;
+        this.setNodeMaxHp(index, n, n.spec as FortSpec);
+        this.emit("converted", { node: index, spec: n.spec, owner: n.owner });
+      }
+      const spec = this.specOf(n);
+      const rangeMult = this.rangeMult();
+      const specDmg = spec === "battery" ? BATTERY_DAMAGE : spec === "barracks" ? 0.8 : 1;
+      const range = (def.range + (spec === "battery" ? BATTERY_RANGE : 0)) * rangeMult;
+      const garrisonBonus = 1 + Math.min(GARRISON_FIRE_MAX, (this.tally.garrison[index] ?? 0) * GARRISON_FIRE_BONUS);
+      const mult = this.firepowerMult(n.owner) * garrisonBonus * specDmg;
+      if (spec === "hospital") {
+        // 野戰醫院：附近的己方步兵回血
+        for (const e of units) {
+          if (e.owner !== n.owner || e.hp <= 0 || e.inNode >= 0 || e.hp >= e.maxHp) continue;
+          if (UNITS[e.type as UnitType].armor !== "soft") continue;
+          if (distTo(e) <= HOSPITAL_RANGE) e.hp = Math.min(e.maxHp, e.hp + HOSPITAL_HEAL * dt);
+        }
+      }
       n.cooldownLeft = Math.max(0, n.cooldownLeft - dt);
       if (n.cooldownLeft <= 0) {
-        const t = this.nearestEnemyUnit(n.owner, units, distTo, def.range);
+        const t = this.nearestEnemyUnit(n.owner, units, distTo, range);
         if (t) {
           n.cooldownLeft = def.cooldown;
           this.hitTarget(n.owner, { kind: "unit", obj: t, lane: t.lane, x: t.x }, def.damage * mult, def.weapon);
@@ -917,10 +1085,11 @@ export class Battle {
       n.airCooldownLeft = Math.max(0, n.airCooldownLeft - dt);
       if (n.airCooldownLeft <= 0) {
         const pos = this.map.nodes[index];
-        const a = this.nearestEnemyPlane(n.owner, planes, pos.x, pos.y, def.airRange);
+        const flak = spec === "flak";
+        const a = this.nearestEnemyPlane(n.owner, planes, pos.x, pos.y, (def.airRange + (flak ? FLAK_FORT_RANGE : 0)) * rangeMult);
         if (a) {
           n.airCooldownLeft = def.airCooldown;
-          a.hp -= def.airDamage * mult;
+          a.hp -= def.airDamage * this.firepowerMult(n.owner) * garrisonBonus * (flak ? FLAK_FORT_AIR : 1);
           this.lastHit.set(a.id, n.owner);
           n.ax = a.x;
           n.ay = a.y;
@@ -1158,6 +1327,10 @@ export class Battle {
     n.owner = "";
     n.faction = -1;
     n.hp = 0;
+    n.spec = "";
+    n.specAt = 0;
+    n.specDone = true;
+    n.maxHp = STRUCTURES[n.kind as StructureKind].hp;
     n.capturer = "";
     n.capFaction = -1;
     n.progress = 0;
@@ -1181,8 +1354,166 @@ export class Battle {
     const killer = this.lastHit.get(targetId);
     const p = killer ? this.state.players.get(killer) : undefined;
     if (!p || !p.alive) return;
-    p.fundsExact += amount;
+    p.fundsExact += amount * (this.state.event === "bounty" ? BOUNTY_EVENT_MULT : 1);
     p.kills += 1;
+  }
+
+  // ================================================================ 隨機事件
+
+  private updateEvents() {
+    const s = this.state;
+    const now = s.time;
+    if (s.event && now >= s.eventEnd) this.endEvent();
+    if (s.event === "barrage") this.updateBarrage();
+    this.updateCrates();
+    if (!s.event && now >= this.nextEvent && now < s.duration - 25) {
+      const choices = EVENT_KINDS.filter((k) => k !== this.lastEvent);
+      this.startEvent(choices[Math.floor(this.rng() * choices.length)]);
+    }
+  }
+
+  /** 測試或除錯用：馬上開始某個事件 */
+  startEvent(kind: EventKind) {
+    const s = this.state;
+    if (s.event) this.endEvent();
+    s.event = kind;
+    s.eventEnd = s.time + EVENTS[kind].duration;
+    this.lastEvent = kind;
+    const extra: Record<string, unknown> = {};
+    if (kind === "supply") {
+      for (let i = 0; i < 2; i++) this.dropCrate();
+    } else if (kind === "barrage") {
+      this.nextShell = s.time + 0.5;
+    } else if (kind === "reinforce") {
+      extra.players = this.reinforce();
+    }
+    this.emit("event", { kind, until: s.eventEnd, ...extra });
+  }
+
+  private endEvent() {
+    const s = this.state;
+    if (s.event === "supply") s.crates.clear();
+    this.shells = [];
+    s.event = "";
+    s.eventEnd = 0;
+    this.nextEvent = s.time + EVENT_GAP[0] + this.rng() * (EVENT_GAP[1] - EVENT_GAP[0]);
+    this.emit("eventEnd", {});
+  }
+
+  /** 補給箱：丟在兩端主人不同（或沒人）的路中段，大家都有機會搶 */
+  private dropCrate() {
+    const s = this.state;
+    const owner = (i: number) => (this.owns(s.nodes[i].owner, i) ? s.nodes[i].owner : "");
+    const lanes = this.map.lanes.map((_, i) => i).filter((i) => {
+      const l = this.map.lanes[i];
+      return owner(l.a) !== owner(l.b) || !owner(l.a);
+    });
+    const pool = lanes.length ? lanes : this.map.lanes.map((_, i) => i);
+    const lane = pool[Math.floor(this.rng() * pool.length)];
+    const len = this.map.lanes[lane].len;
+    const c = new Crate();
+    c.id = `c${this.nextId++}`;
+    c.lane = lane;
+    c.x = len * (0.3 + this.rng() * 0.4);
+    c.landT = s.time + CRATE_LAND_TIME;
+    s.crates.set(c.id, c);
+  }
+
+  private updateCrates() {
+    const s = this.state;
+    if (s.crates.size === 0) return;
+    const now = s.time;
+    const taken: string[] = [];
+    s.crates.forEach((c) => {
+      if (c.landT > now) return;
+      let best: Unit | null = null;
+      let bestD = CRATE_RADIUS;
+      s.units.forEach((u) => {
+        if (u.inNode >= 0 || u.hp <= 0 || u.landT > now) return;
+        const d = roadDistance(this.map, u.lane, u.x, c.lane, c.x);
+        if (d <= bestD) {
+          bestD = d;
+          best = u;
+        }
+      });
+      if (!best) return;
+      const u = best as Unit;
+      const p = s.players.get(u.owner);
+      if (!p || !p.alive) return;
+      p.fundsExact += SUPPLY_AMOUNT;
+      taken.push(c.id);
+      this.emit("crateTaken", { id: c.id, by: p.id, faction: p.faction, lane: c.lane, x: c.x, amount: SUPPLY_AMOUNT });
+    });
+    for (const id of taken) s.crates.delete(id);
+    if (s.event === "supply" && s.crates.size === 0) s.eventEnd = Math.min(s.eventEnd, now + 3);
+  }
+
+  /** 砲擊彈幕：先標記紅圈，過 2 秒落彈，敵我不分 */
+  private updateBarrage() {
+    const s = this.state;
+    const now = s.time;
+    if (now >= this.nextShell && now < s.eventEnd - BARRAGE.warn) {
+      this.nextShell = now + BARRAGE.interval * (0.7 + this.rng() * 0.6);
+      // 六成機率瞄準有部隊的地方
+      const field: Unit[] = [];
+      s.units.forEach((u) => {
+        if (u.inNode < 0 && u.hp > 0 && u.landT <= now) field.push(u);
+      });
+      let lane: number;
+      let x: number;
+      if (field.length && this.rng() < 0.6) {
+        const u = field[Math.floor(this.rng() * field.length)];
+        lane = u.lane;
+        x = u.x + (this.rng() - 0.5) * 80;
+      } else {
+        lane = Math.floor(this.rng() * this.map.lanes.length);
+        x = this.rng() * this.map.lanes[lane].len;
+      }
+      x = Math.max(0, Math.min(this.map.lanes[lane].len, x));
+      this.shells.push({ lane, x, at: now + BARRAGE.warn });
+      this.emit("barrageMark", { lane, x, delay: BARRAGE.warn });
+    }
+    const due = this.shells.filter((sh) => sh.at <= now);
+    if (!due.length) return;
+    this.shells = this.shells.filter((sh) => sh.at > now);
+    const units: Unit[] = [];
+    s.units.forEach((u) => units.push(u));
+    const structures: Structure[] = [];
+    s.structures.forEach((st) => structures.push(st));
+    for (const sh of due) {
+      for (const u of units) {
+        if (u.hp <= 0 || u.inNode >= 0 || u.landT > now) continue;
+        if (roadDistance(this.map, u.lane, u.x, sh.lane, sh.x) <= BARRAGE.radius) {
+          u.hp -= BARRAGE.damage * DAMAGE_TABLE[BARRAGE.weapon][UNITS[u.type as UnitType].armor];
+          this.lastHit.delete(u.id); // 不是任何玩家的戰功
+        }
+      }
+      for (const st of structures) {
+        if (st.hp > 0 && roadDistance(this.map, st.lane, st.x, sh.lane, sh.x) <= BARRAGE.radius) st.hp -= BARRAGE.damage * 0.5;
+      }
+      this.emit("bomb", { lane: sh.lane, x: sh.x });
+    }
+  }
+
+  /** 援軍：堡壘最少的玩家（大家一樣多就每個人）大本營免費多 2 個步兵班＋1 個機槍組 */
+  private reinforce(): string[] {
+    const alive = this.alivePlayers();
+    if (!alive.length) return [];
+    const min = Math.min(...alive.map((p) => p.forts));
+    const got: string[] = [];
+    for (const p of alive) {
+      if (p.forts !== min || p.hq < 0) continue;
+      for (const type of ["rifle", "rifle", "mg"] as UnitType[]) {
+        const pop = UNITS[type].pop;
+        if ((this.tally.pop.get(p.id) ?? 0) + pop > POP_CAP) break;
+        if ((this.tally.garrison[p.hq] ?? 0) + pop > this.garrisonCapAt(p.hq)) break;
+        this.addUnit(p, type, { node: p.hq });
+        this.tally.pop.set(p.id, (this.tally.pop.get(p.id) ?? 0) + pop);
+        this.tally.garrison[p.hq] += pop;
+      }
+      got.push(p.id);
+    }
+    return got;
   }
 
   /** 大本營被打爆：出局，部隊和工事消失，所有據點變成無主 */

@@ -70,28 +70,38 @@ export const FACTIONS: Faction[] = [
 export const OUTLINE = 0x1d1d17;
 
 // ---------- 傷害類型與護甲 ----------
-export type ArmorClass = "soft" | "hard" | "building";
-export type WeaponClass = "rifle" | "mg" | "at" | "cannon" | "shell" | "bomb" | "demo" | "none";
+export type ArmorClass = "soft" | "light" | "hard" | "building"; // 步兵、輕裝甲車輛、戰車、建築
+export type WeaponClass = "rifle" | "mg" | "at" | "cannon" | "shell" | "bomb" | "demo" | "sniper" | "flame" | "flak" | "none";
 // 距離、速度都是畫面上的像素
 
 // 傷害倍率：武器打不同護甲的效果。剋制關係主要從這裡來。
 export const DAMAGE_TABLE: Record<WeaponClass, Record<ArmorClass, number>> = {
-  rifle: { soft: 1.0, hard: 0.15, building: 0.5 },
-  mg: { soft: 1.0, hard: 0.1, building: 0.3 },
-  at: { soft: 0.35, hard: 2.0, building: 1.0 },
-  cannon: { soft: 1.0, hard: 1.0, building: 1.3 },
-  shell: { soft: 1.0, hard: 0.5, building: 1.0 },
-  bomb: { soft: 1.0, hard: 0.8, building: 1.4 },
-  demo: { soft: 0.25, hard: 0.6, building: 3.0 }, // 工兵爆破
-  none: { soft: 0, hard: 0, building: 0 },
+  rifle: { soft: 1.0, light: 0.5, hard: 0.15, building: 0.5 },
+  mg: { soft: 1.0, light: 0.45, hard: 0.1, building: 0.3 },
+  at: { soft: 0.35, light: 1.6, hard: 2.0, building: 1.0 },
+  cannon: { soft: 1.0, light: 1.2, hard: 1.0, building: 1.3 },
+  shell: { soft: 1.0, light: 0.8, hard: 0.5, building: 1.0 },
+  bomb: { soft: 1.0, light: 1.0, hard: 0.8, building: 1.4 },
+  demo: { soft: 0.25, light: 0.8, hard: 0.6, building: 3.0 }, // 工兵爆破
+  sniper: { soft: 1.0, light: 0.15, hard: 0.05, building: 0.1 }, // 狙擊：一槍一個，打不穿裝甲
+  flame: { soft: 1.3, light: 0.7, hard: 0.3, building: 1.2 }, // 火焰：近距離燒一片
+  flak: { soft: 0.8, light: 1.0, hard: 0.3, building: 0.3 }, // 防空砲車平射
+  none: { soft: 0, light: 0, hard: 0, building: 0 },
 };
 
 // ---------- 地面部隊 ----------
-export type UnitType = "rifle" | "mg" | "at" | "tank" | "artillery" | "engineer" | "medic" | "para";
+export type UnitType =
+  | "rifle" | "mg" | "sniper" | "flame" | "car" | "tank" | "at" | "flak" | "artillery" | "engineer" | "medic" | "para";
 /** 可以在據點買的兵種（空降兵只能由運輸機投放） */
-export const UNIT_TYPES: UnitType[] = ["rifle", "mg", "at", "tank", "artillery", "engineer", "medic"];
+export const UNIT_TYPES: UnitType[] = ["rifle", "mg", "sniper", "flame", "car", "tank", "at", "flak", "artillery", "engineer", "medic"];
+/** 介面上的兵種分頁 */
+export const UNIT_GROUPS: { name: string; types: UnitType[] }[] = [
+  { name: "步兵", types: ["rifle", "mg", "sniper", "flame"] },
+  { name: "車砲", types: ["car", "tank", "at", "flak"] },
+  { name: "支援", types: ["artillery", "engineer", "medic"] },
+];
 /** 一次派出很多兵時的出門順序：前排先走、支援部隊殿後 */
-export const RELEASE_ORDER: UnitType[] = ["tank", "rifle", "para", "mg", "at", "engineer", "medic", "artillery"];
+export const RELEASE_ORDER: UnitType[] = ["tank", "car", "rifle", "flame", "para", "mg", "sniper", "at", "flak", "engineer", "medic", "artillery"];
 
 export interface UnitDef {
   name: string;
@@ -107,10 +117,13 @@ export interface UnitDef {
   armor: ArmorClass;
   weapon: WeaponClass;
   members: number; // 畫面上顯示幾個人／幾輛
-  splash?: number; // 爆炸範圍（砲兵）
+  splash?: number; // 範圍傷害半徑（砲兵、火焰兵）
   heal?: number; // 醫療兵：每秒幫範圍內每個友軍回多少血
   healTargets?: number; // 醫療兵：同時治療幾個
-  repair?: number; // 工兵：每秒修理多少血（據點、工事、戰車）
+  repair?: number; // 工兵：每秒修理多少血（據點、工事、車輛）；也會加快工事施工
+  airDamage?: number; // 防空砲車：對空傷害
+  airCooldown?: number;
+  airRange?: number;
   hotkey: string;
 }
 
@@ -123,25 +136,41 @@ export const UNITS: Record<UnitType, UnitDef> = {
     name: "機槍組", short: "射程遠、壓制步兵", cost: 85, pop: 1, hp: 100, damage: 8, cooldown: 0.3,
     range: 125, speed: 24, armor: "soft", weapon: "mg", members: 2, hotkey: "2",
   },
-  at: {
-    name: "反戰車砲", short: "專打戰車", cost: 110, pop: 1, hp: 100, damage: 70, cooldown: 2.5,
-    range: 150, speed: 20, armor: "soft", weapon: "at", members: 3, hotkey: "3",
+  sniper: {
+    name: "狙擊手", short: "超遠射程點殺步兵，剋機槍、砲兵", cost: 120, pop: 1, hp: 70, damage: 50, cooldown: 3.0,
+    range: 190, speed: 26, armor: "soft", weapon: "sniper", members: 1, hotkey: "3",
+  },
+  flame: {
+    name: "火焰兵", short: "近距離燒一片，剋擠在一起的步兵", cost: 100, pop: 1, hp: 130, damage: 13, cooldown: 0.5,
+    range: 55, speed: 27, armor: "soft", weapon: "flame", members: 2, splash: 24, hotkey: "4",
+  },
+  car: {
+    name: "裝甲車", short: "跑最快的輕裝甲，搶點、追殺步兵", cost: 140, pop: 2, hp: 260, damage: 7, cooldown: 0.35,
+    range: 115, speed: 46, armor: "light", weapon: "mg", members: 1, hotkey: "5",
   },
   tank: {
-    name: "戰車", short: "厚甲突破，剋步兵", cost: 220, pop: 3, hp: 480, damage: 45, cooldown: 1.8,
-    range: 115, speed: 27, armor: "hard", weapon: "cannon", members: 1, hotkey: "4",
+    name: "戰車", short: "厚甲突破，剋步兵與裝甲車", cost: 220, pop: 3, hp: 480, damage: 45, cooldown: 1.8,
+    range: 115, speed: 27, armor: "hard", weapon: "cannon", members: 1, hotkey: "6",
+  },
+  at: {
+    name: "反戰車砲", short: "專打戰車與裝甲車", cost: 110, pop: 1, hp: 100, damage: 70, cooldown: 2.5,
+    range: 150, speed: 20, armor: "soft", weapon: "at", members: 3, hotkey: "7",
+  },
+  flak: {
+    name: "防空砲車", short: "跟著部隊打飛機，也能平射", cost: 150, pop: 2, hp: 220, damage: 10, cooldown: 0.45,
+    range: 120, speed: 30, armor: "light", weapon: "flak", members: 1, airDamage: 30, airCooldown: 0.45, airRange: 230, hotkey: "8",
   },
   artillery: {
     name: "砲兵", short: "遠程範圍傷害，70 以內打不到", cost: 180, pop: 2, hp: 70, damage: 30, cooldown: 4.0,
-    range: 200, minRange: 70, speed: 18, armor: "soft", weapon: "shell", members: 2, splash: 32, hotkey: "5",
+    range: 200, minRange: 70, speed: 18, armor: "soft", weapon: "shell", members: 2, splash: 32, hotkey: "9",
   },
   engineer: {
-    name: "工兵", short: "近身爆破堡壘，修理己方建築與戰車", cost: 90, pop: 1, hp: 90, damage: 30, cooldown: 1.5,
-    range: 50, speed: 28, armor: "soft", weapon: "demo", members: 2, repair: 30, hotkey: "6",
+    name: "工兵", short: "爆破堡壘、修理建築與車輛、加快施工", cost: 90, pop: 1, hp: 90, damage: 30, cooldown: 1.5,
+    range: 50, speed: 28, armor: "soft", weapon: "demo", members: 2, repair: 30, hotkey: "0",
   },
   medic: {
     name: "醫療兵", short: "幫附近步兵回血，不會攻擊", cost: 70, pop: 1, hp: 80, damage: 0, cooldown: 1,
-    range: 80, speed: 30, armor: "soft", weapon: "none", members: 2, heal: 7, healTargets: 3, hotkey: "7",
+    range: 80, speed: 30, armor: "soft", weapon: "none", members: 2, heal: 7, healTargets: 3, hotkey: "-",
   },
   para: {
     name: "空降兵", short: "由運輸機投放", cost: 100, pop: 1, hp: 100, damage: 12, cooldown: 1.0,
@@ -188,6 +217,7 @@ export interface StructureDef {
   airDamage: number; // 對空
   airCooldown: number;
   airRange: number;
+  buildTime?: number; // 工事施工秒數（附近有工兵會比較快）
 }
 
 export const STRUCTURES: Record<StructureKind, StructureDef> = {
@@ -205,17 +235,67 @@ export const STRUCTURES: Record<StructureKind, StructureDef> = {
   },
   bunker: {
     name: "機槍碉堡", short: "壓制步兵", cost: 140, hp: 800, damage: 18, cooldown: 0.35, range: 160, weapon: "mg",
-    airDamage: 0, airCooldown: 1, airRange: 0,
+    airDamage: 0, airCooldown: 1, airRange: 0, buildTime: 12,
   },
   atnest: {
     name: "反戰車砲陣地", short: "擋住戰車", cost: 170, hp: 700, damage: 150, cooldown: 2.4, range: 180, weapon: "at",
-    airDamage: 0, airCooldown: 1, airRange: 0,
+    airDamage: 0, airCooldown: 1, airRange: 0, buildTime: 15,
   },
   aa: {
     name: "防空砲", short: "打下經過的飛機", cost: 150, hp: 450, damage: 0, cooldown: 1, range: 0, weapon: "mg",
-    airDamage: 55, airCooldown: 0.5, airRange: 290,
+    airDamage: 55, airCooldown: 0.5, airRange: 290, buildTime: 12,
   },
 };
+
+// 施工：一開始只有 25% 血、不能開火，蓋好才滿血
+export const BUILD_START_HP = 0.25;
+export const ENGINEER_BUILD_BONUS = 1.0; // 附近每個工兵 +100% 施工速度
+export const ENGINEER_BUILD_MAX = 3.0; // 最多 +300%
+export const ENGINEER_BUILD_RANGE = 90;
+
+// ---------- 堡壘改建（佔下來的堡壘可以改成不同用途） ----------
+export type FortSpec = "" | "battery" | "barracks" | "depot" | "flak" | "hospital";
+export const FORT_SPECS: Exclude<FortSpec, "">[] = ["battery", "barracks", "depot", "flak", "hospital"];
+export const FORT_SPEC_DEFS: Record<Exclude<FortSpec, "">, { name: string; short: string; cost: number }> = {
+  battery: { name: "砲台", short: "對地火力 +60%、射程 +30，駐軍上限 -4", cost: 150 },
+  barracks: { name: "兵營", short: "駐軍上限 +8、駐軍回血加倍、在這裡買兵 85 折，火力 -20%", cost: 120 },
+  depot: { name: "補給站", short: "收入 +2.5/秒，但血量 -20%", cost: 140 },
+  flak: { name: "防空要塞", short: "對空火力 ×3、對空射程 +80", cost: 110 },
+  hospital: { name: "野戰醫院", short: "附近 160 內的己方步兵每秒回 6 血、駐軍回血加倍", cost: 130 },
+};
+export const CONVERT_TIME = 10; // 改建要幾秒（期間沒有特殊效果）
+export const BATTERY_DAMAGE = 1.6;
+export const BATTERY_RANGE = 30;
+export const BARRACKS_CAP = 8;
+export const BARRACKS_DISCOUNT = 0.85;
+export const BATTERY_CAP = -4;
+export const DEPOT_INCOME = 2.5;
+export const DEPOT_HP = 0.8;
+export const FLAK_FORT_AIR = 3;
+export const FLAK_FORT_RANGE = 80;
+export const HOSPITAL_HEAL = 6;
+export const HOSPITAL_RANGE = 160;
+
+// ---------- 隨機事件 ----------
+export type EventKind = "supply" | "storm" | "barrage" | "reinforce" | "fuel" | "bounty";
+export const EVENT_KINDS: EventKind[] = ["supply", "storm", "barrage", "reinforce", "fuel", "bounty"];
+export const EVENTS: Record<EventKind, { name: string; desc: string; duration: number }> = {
+  supply: { name: "補給空投", desc: "地圖上空投了 2 個補給箱，部隊先碰到的人拿 $200", duration: 45 },
+  storm: { name: "暴風雨", desc: "飛機無法起飛，所有射程 -20%", duration: 30 },
+  barrage: { name: "砲擊彈幕", desc: "不明砲火無差別轟炸，看到紅圈快躲開", duration: 16 },
+  reinforce: { name: "援軍抵達", desc: "堡壘最少的玩家，大本營免費多 3 支部隊", duration: 6 },
+  fuel: { name: "燃料短缺", desc: "戰車、裝甲車、防空砲車移動速度減半", duration: 30 },
+  bounty: { name: "戰功懸賞", desc: "擊殺敵軍的賞金加倍", duration: 40 },
+};
+export const EVENT_FIRST = 70; // 第一個事件在開局幾秒後
+export const EVENT_GAP: [number, number] = [45, 75]; // 事件結束後隔多久出下一個
+export const SUPPLY_AMOUNT = 200;
+export const CRATE_RADIUS = 34;
+export const CRATE_LAND_TIME = 2.5;
+export const STORM_RANGE = 0.8;
+export const FUEL_SPEED = 0.5;
+export const BOUNTY_EVENT_MULT = 2;
+export const BARRAGE = { interval: 0.7, warn: 2, radius: 40, damage: 70, weapon: "bomb" as WeaponClass };
 
 // 自己的據點旁邊，每條路上可以蓋工事的位置（距離據點幾像素）
 export const BUILD_SLOTS = [95, 170];
@@ -248,6 +328,7 @@ export interface DispatchMsg { node: number; counts: number[]; via: number[]; de
 export interface OrderMsg { units: string[]; via: number[]; dest: Dest; enter: boolean }
 export interface RetreatMsg { units: string[] }
 export interface BuildMsg { lane: number; node: number; slot: number; kind: BuildKind }
+export interface ConvertMsg { node: number; spec: FortSpec }
 export interface UpgradeMsg { kind: UpgradeKind }
 export interface AirMsg { kind: AirKind; lane: number; x: number }
 export interface AddBotMsg { faction?: number }

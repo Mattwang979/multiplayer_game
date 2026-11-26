@@ -138,6 +138,42 @@ button { font-family: inherit; }
 .timer strong { display: block; font-family: var(--stencil); font-size: 34px; font-weight: 400; color: #f4ecd6; line-height: 1.1; }
 .timer span { font-size: 11px; letter-spacing: 3px; color: var(--muted); }
 .timer.urgent strong { color: var(--alert); animation: pulse 1s infinite; }
+.timer { position: relative; }
+.event-chip { position: absolute; left: 50%; top: calc(100% + 6px); transform: translateX(-50%); padding: 3px 10px; background: var(--alert); color: #fff6e8; font-style: normal; font-size: 13px; font-weight: 900; white-space: nowrap; cursor: help; animation: pulse 1.6s infinite; }
+
+/* 兵種分頁 */
+.g-units { align-items: stretch; }
+.utabs { display: flex; flex-direction: column; gap: 3px; }
+.utabs button { flex: 1; min-width: 54px; padding: 0 8px; background: var(--panel-2); border: 1px solid var(--line-2); color: var(--muted); font-size: 12px; font-weight: 900; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.utabs button.on { border-color: var(--gold); color: var(--gold); background: #2a2716; }
+.utabs button i { font-style: normal; font-size: 11px; color: var(--text); }
+.ucards { display: flex; gap: 6px; }
+.ucard.off { display: none; }
+
+/* 改建選單 */
+.g-fort { position: relative; }
+.spec-pop { display: none; }
+.g-fort.spec-open .spec-pop {
+  display: flex; flex-direction: column; gap: 4px; position: absolute; left: 0; bottom: calc(100% + 12px); width: 360px; padding: 8px;
+  background: rgba(8,8,6,.97); border: 1px solid var(--gold); z-index: 7;
+}
+.sp-title { margin: 0 0 4px; font-size: 14px; font-weight: 900; color: var(--gold); }
+.sp-title span { display: block; font-size: 11px; font-weight: 500; color: var(--muted); }
+.spec-row { display: grid; grid-template-columns: 22px 1fr auto; grid-template-areas: "i n c" "i d d"; gap: 0 8px; align-items: center; padding: 6px 8px; background: var(--panel-2); border: 1px solid var(--line-2); color: var(--text); text-align: left; cursor: pointer; }
+.spec-row:hover:not(:disabled) { border-color: var(--gold); }
+.spec-row:disabled { opacity: .55; cursor: default; }
+.spec-row.cur { border-color: #7ed957; }
+.spec-row.poor em { color: #ff8a70; }
+.spec-row b { grid-area: n; font-size: 14px; }
+.spec-row em { grid-area: c; font-style: normal; font-size: 13px; font-weight: 900; color: var(--gold); }
+.spec-row small { grid-area: d; font-size: 11px; color: var(--muted); line-height: 1.35; }
+.sr-icon { grid-area: i; width: 18px; height: 18px; border: 2px solid #1d1d17; background: #a5a090; transform: rotate(45deg); }
+.sr-battery { background: #3a3b34; }
+.sr-barracks { background: #6f7a3e; }
+.sr-depot { background: #b07a3a; }
+.sr-flak { background: #8d9196; }
+.sr-hospital { background: #f4f1e6; box-shadow: inset 0 0 0 4px #d8322a; }
+.fort-ctl button:disabled { opacity: .5; cursor: default; }
 @keyframes pulse { 50% { opacity: .55 } }
 .funds { padding: 6px 16px; background: rgba(10,10,8,.85); border: 1px solid var(--line); text-align: right; }
 .funds strong { display: block; font-family: var(--stencil); font-size: 30px; font-weight: 400; color: var(--gold); line-height: 1.15; }
@@ -170,11 +206,12 @@ button { font-family: inherit; }
 .ubuy.flash { animation: cardflash .35s; }
 
 /* 據點面板 */
-.fort-box { width: 230px; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.fort-box { width: 250px; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
 .fort-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .fort-name { margin: 0; font-size: 15px; font-weight: 900; color: var(--gold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fort-sub { margin: 0; font-size: 12px; color: var(--muted); white-space: nowrap; }
-.fort-ctl { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 4px; }
+.fort-ctl { display: grid; grid-template-columns: 1.7fr 1fr 1fr 1.1fr; gap: 4px; }
+.fort-spec { color: var(--gold) !important; }
 .fort-ctl button { min-height: 28px; padding: 0 6px; background: var(--panel-2); border: 1px solid var(--line-2); color: var(--text); font-size: 12px; font-weight: 900; cursor: pointer; white-space: nowrap; }
 .fort-ctl button:hover { border-color: var(--gold); }
 .fort-toggle.on { border-color: var(--gold); color: var(--gold); }
@@ -213,12 +250,16 @@ button { font-family: inherit; }
 .feed p { margin: 0; padding: 6px 10px; background: rgba(10,10,8,.8); border-left: 3px solid var(--gold); font-size: 13px; animation: feedin .25s ease-out; }
 @keyframes feedin { from { transform: translateX(30px); opacity: 0 } }
 
-.banner { position: absolute; left: 0; right: 0; top: 32%; display: flex; justify-content: center; pointer-events: none; }
+/* 大提示字：放在上方不擋戰場，點一下就關 */
+.banner { position: absolute; left: 0; right: 0; top: 130px; display: flex; justify-content: center; pointer-events: none; z-index: 5; }
 .banner .b {
-  padding: 16px 48px; font-size: clamp(32px, 5vw, 64px); font-weight: 900; letter-spacing: 12px; text-align: center;
-  animation: slam .9s cubic-bezier(.2,1.6,.4,1) both, bannerout .5s ease-in 2.2s forwards;
+  position: relative; pointer-events: auto; cursor: pointer;
+  padding: 8px 40px 8px 26px; font-size: clamp(20px, 2.4vw, 32px); font-weight: 900; letter-spacing: 6px; text-align: center;
+  animation: slam .6s cubic-bezier(.2,1.6,.4,1) both, bannerout .4s ease-in calc(var(--life, 2400ms) - 400ms) forwards;
 }
-.banner .b small { display: block; font-size: .35em; letter-spacing: 8px; margin-top: 4px; font-weight: 700; }
+.banner .b small { display: block; font-size: .45em; letter-spacing: 2px; margin-top: 2px; font-weight: 700; }
+.banner .b .b-x { position: absolute; right: 10px; top: 6px; font-size: 14px; letter-spacing: 0; opacity: .7; }
+.banner .b.closing { animation: bannerout .18s ease-in forwards; }
 .banner .b.red { background: var(--alert); color: #fff6e8; box-shadow: 0 0 60px rgba(224,65,43,.6); }
 .banner .b.gold { background: var(--gold); color: #1b1405; box-shadow: 0 0 60px rgba(242,193,78,.5); }
 .banner .b.dark { background: #0b0b08; border: 2px solid var(--fc, var(--gold)); color: var(--text); }
@@ -317,6 +358,16 @@ body.mobile .fort-sub { font-size: 11px; }
 body.mobile .fort-ctl { flex: 1; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; }
 body.mobile .fort-ctl button { min-height: 0; font-size: 12px; padding: 0 2px; }
 body.mobile .fort-toggle { grid-column: 1 / -1; }
+body.mobile .fort-spec { grid-column: 1 / -1; }
+body.mobile .g-fort.spec-open .spec-pop { left: calc(100% + 10px); bottom: auto; top: 0; width: min(380px, 60vw); max-height: calc(100vh - 20px); overflow-y: auto; }
+body.mobile .spec-row { padding: 5px 8px; }
+body.mobile .g-units { flex-direction: column; }
+body.mobile .utabs { flex-direction: row; flex: none; }
+body.mobile .utabs { gap: 3px; }
+body.mobile .utabs button { flex: 1; min-width: 0; min-height: 30px; padding: 0 2px; gap: 2px; justify-content: center; font-size: 12px; white-space: nowrap; }
+body.mobile .utabs button i { font-size: 10px; }
+body.mobile .ucards { flex: 1; flex-direction: column; gap: 4px; min-height: 0; }
+body.mobile .event-chip { top: auto; bottom: -24px; font-size: 11px; padding: 2px 8px; }
 body.mobile .fort-tip { font-size: 10px; white-space: normal; line-height: 1.3; }
 body.mobile .ucard { flex: 1; min-height: 0; width: 100%; flex-direction: row; }
 body.mobile .ucard .ubuy { min-width: 0; padding: 2px 6px; justify-content: center; }
@@ -366,8 +417,8 @@ body.mobile .top-btns .btn.icon { min-height: 32px; width: 34px; }
 
 body.mobile .feed { display: none; }
 body.mobile .toast { bottom: 58px; font-size: 13px; max-width: 70vw; text-align: center; }
-body.mobile .banner { top: 26%; }
-body.mobile .banner .b { font-size: clamp(24px, 7vh, 44px); padding: 10px 28px; letter-spacing: 8px; }
+body.mobile .banner { top: 48px; left: var(--side); right: var(--side); }
+body.mobile .banner .b { font-size: clamp(16px, 5vh, 24px); padding: 6px 34px 6px 18px; letter-spacing: 3px; max-width: 92%; }
 body.mobile .target-hint { top: 40px; font-size: 13px; padding: 4px 4px 4px 12px; }
 body.mobile .target-hint .btn { min-height: 34px; }
 body.mobile .result-box { max-height: 92vh; overflow-y: auto; padding: 18px; gap: 12px; }

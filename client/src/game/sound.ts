@@ -5,7 +5,7 @@
 
 type Kind =
   | "rifle" | "mg" | "cannon" | "at" | "shell" | "boom" | "bigboom" | "flak" | "whistle" | "siren" | "click" | "deploy" | "error" | "plane"
-  | "capture" | "fortLost" | "victory" | "defeat" | "start";
+  | "capture" | "fortLost" | "victory" | "defeat" | "start" | "sniper" | "flame" | "event";
 
 const SFX_VOLUME = 0.85;
 const MUSIC_VOLUME = 0.32;
@@ -21,7 +21,7 @@ let unlockEl: HTMLAudioElement | null = null;
 const last = new Map<Kind, number>();
 const MIN_GAP: Partial<Record<Kind, number>> = {
   rifle: 0.05, mg: 0.09, cannon: 0.08, at: 0.08, shell: 0.12, boom: 0.07, bigboom: 0.15, flak: 0.08, plane: 1.5, click: 0.03,
-  capture: 0.6, fortLost: 0.8, siren: 2,
+  capture: 0.6, fortLost: 0.8, siren: 2, sniper: 0.1, flame: 0.12, event: 1,
 };
 
 try {
@@ -243,6 +243,24 @@ export function play(kind: Kind, volume = 1) {
   last.set(kind, now);
   const v = Math.min(1.2, volume);
   switch (kind) {
+    case "sniper":
+      // 尖銳槍響＋長長的回音
+      noiseBurst(now, 0.03, 0.8 * v, "highpass", 3500, 0.7);
+      noiseBurst(now, 0.6, 0.35 * v, "bandpass", 1400, 0.5, 500);
+      tone(now, 0.1, 0.25 * v, "triangle", 900, 300);
+      break;
+    case "flame":
+      // 火焰噴射的呼呼聲
+      noiseBurst(now, 0.45, 0.5 * v, "bandpass", 600, 0.8, 300, master, 0.05);
+      noiseBurst(now, 0.3, 0.2 * v, "highpass", 2500, 0.5);
+      break;
+    case "event": {
+      // 事件通知：兩聲短號角
+      brass(now, 0.12, NOTE(72), 0.16 * v);
+      brass(now + 0.15, 0.3, NOTE(79), 0.16 * v);
+      snare(now, 0.2 * v);
+      break;
+    }
     case "rifle":
       noiseBurst(now, 0.035, 0.55 * v, "highpass", 3000, 0.7);
       noiseBurst(now, 0.12, 0.32 * v, "bandpass", 1100, 0.9);

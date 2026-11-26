@@ -423,7 +423,8 @@ function hq(ctx: Ctx, f: Faction) {
 }
 
 /** 星形稜堡：faction = null 是無主（灰色、白旗） */
-function fort(ctx: Ctx, f: Faction | null) {
+/** 星形稜堡：faction = null 是無主（灰色、白旗）；spec 是改建後的樣式 */
+function fort(ctx: Ctx, f: Faction | null, spec = "") {
   ctx.translate(40, 40);
   const star = new Path2D();
   for (let i = 0; i < 8; i++) {
@@ -433,16 +434,135 @@ function fort(ctx: Ctx, f: Faction | null) {
     else star.lineTo(Math.cos(a) * r, Math.sin(a) * r);
   }
   star.closePath();
-  fillStroke(ctx, star, "#a5a090", 2.5);
+  // 改建後的外觀：牆的顏色和外圍裝飾不同
+  const wall: Record<string, string> = { battery: "#8f8a7c", barracks: "#a79a7a", depot: "#a8946a", flak: "#8d9196", hospital: "#d9d4c4" };
+  // 砲台：四個角伸出砲管
+  if (spec === "battery") {
+    for (let i = 0; i < 4; i++) {
+      ctx.save();
+      ctx.rotate(-Math.PI / 4 + (i * Math.PI) / 2);
+      const b = new Path2D();
+      b.rect(18, -3, 22, 6);
+      fillStroke(ctx, b, "#3a3b34", 1.5);
+      ctx.restore();
+    }
+  }
+  fillStroke(ctx, star, wall[spec] ?? "#a5a090", 2.5);
   const g = ctx.createRadialGradient(-8, -8, 2, 0, 0, 34);
   g.addColorStop(0, "rgba(255,255,255,0.25)");
   g.addColorStop(1, "rgba(0,0,0,0.22)");
   ctx.fillStyle = g;
   ctx.fill(star);
+  if (spec === "depot") {
+    // 補給站：黃黑警示線＋木箱
+    ctx.save();
+    ctx.setLineDash([5, 5]);
+    ctx.strokeStyle = "#f2c14e";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 0, 20, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    for (const [x, y] of [[-22, 14], [16, 18], [-18, -20]]) {
+      const box = new Path2D();
+      box.rect(x, y, 9, 8);
+      fillStroke(ctx, box, "#b07a3a", 1.2);
+      ctx.strokeStyle = "rgba(0,0,0,0.4)";
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + 9, y + 8);
+      ctx.stroke();
+    }
+  }
+  if (spec === "barracks") {
+    // 兵營：兩排營房屋頂
+    for (const y of [-24, 18]) {
+      const roof = new Path2D();
+      roof.rect(-13, y, 26, 7);
+      fillStroke(ctx, roof, "#6f7a3e", 1.2);
+      ctx.strokeStyle = "rgba(0,0,0,0.3)";
+      ctx.beginPath();
+      ctx.moveTo(-13, y + 3.5);
+      ctx.lineTo(13, y + 3.5);
+      ctx.stroke();
+    }
+  }
+  if (spec === "flak") {
+    // 防空要塞：兩組朝天的砲管
+    for (const [x, y, a] of [[-16, 12, -2.2], [16, 12, -0.95]]) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(a);
+      for (const off of [-2.5, 2.5]) {
+        const b = new Path2D();
+        b.rect(0, off - 1.2, 15, 2.4);
+        fillStroke(ctx, b, "#2b2c27", 1);
+      }
+      ctx.restore();
+      const base = new Path2D();
+      base.arc(x, y, 4.5, 0, Math.PI * 2);
+      fillStroke(ctx, base, "#55574e", 1.2);
+    }
+  }
   const yard = new Path2D();
   yard.arc(0, 0, 15, 0, Math.PI * 2);
-  fillStroke(ctx, yard, f ? f.css : "#8d887a", 2);
-  if (f) emblem(ctx, f.emblem, 0, 0, 8, f.mark);
+  if (spec === "hospital") {
+    fillStroke(ctx, yard, "#f4f1e6", 2);
+    ctx.strokeStyle = f ? f.css : "#8d887a";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 0, 12, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "#d8322a";
+    ctx.fillRect(-2.5, -8, 5, 16);
+    ctx.fillRect(-8, -2.5, 16, 5);
+  } else {
+    fillStroke(ctx, yard, f ? f.css : "#8d887a", 2);
+    const ink = f ? f.mark : "#f4f1e6";
+    if (!spec) {
+      if (f) emblem(ctx, f.emblem, 0, 0, 8, f.mark);
+    } else if (spec === "battery") {
+      // 砲彈
+      ctx.fillStyle = ink;
+      ctx.beginPath();
+      ctx.moveTo(-3, 7);
+      ctx.lineTo(-3, -3);
+      ctx.quadraticCurveTo(0, -10, 3, -3);
+      ctx.lineTo(3, 7);
+      ctx.closePath();
+      ctx.fill();
+    } else if (spec === "barracks") {
+      // 鋼盔
+      ctx.fillStyle = ink;
+      ctx.beginPath();
+      ctx.arc(0, 2, 7, Math.PI, 0);
+      ctx.fill();
+      ctx.fillRect(-9, 2, 18, 2.5);
+    } else if (spec === "depot") {
+      // 箱子
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(-6, -5, 12, 10);
+      ctx.beginPath();
+      ctx.moveTo(-6, -5);
+      ctx.lineTo(6, 5);
+      ctx.moveTo(6, -5);
+      ctx.lineTo(-6, 5);
+      ctx.stroke();
+    } else if (spec === "flak") {
+      // 爆炸星芒
+      ctx.fillStyle = ink;
+      ctx.beginPath();
+      for (let i = 0; i < 16; i++) {
+        const a = (i * Math.PI) / 8;
+        const r = i % 2 ? 3 : 8;
+        if (i) ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+        else ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
   // 旗子
   ctx.strokeStyle = OUT;
   ctx.lineWidth = 2;
@@ -453,6 +573,153 @@ function fort(ctx: Ctx, f: Faction | null) {
   const flag = new Path2D();
   flag.rect(14, -30, 13, 8);
   fillStroke(ctx, flag, f ? f.css : "#f4f1e6", 1.2);
+}
+
+/** 狙擊手：偽裝網斗篷、長槍管 */
+function sniperMan(ctx: Ctx, f: Faction) {
+  ctx.translate(11, 9);
+  ctx.strokeStyle = OUT;
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#56603a";
+  ctx.beginPath();
+  ctx.ellipse(-1, 0, 6, 7.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#3f4a2a";
+  for (const [x, y] of [[-4, -4], [-3, 4], [2, -5], [1, 5]]) {
+    ctx.beginPath();
+    ctx.arc(x, y, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.strokeStyle = "#2a2a24";
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(0, 1.5);
+  ctx.lineTo(11, 1.5);
+  ctx.stroke();
+  ctx.fillStyle = "#2a2a24";
+  ctx.fillRect(3, -0.5, 3, 1.5);
+  ctx.strokeStyle = OUT;
+  ctx.fillStyle = f.css;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.arc(0, 0, 3.8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+}
+
+/** 火焰兵：背兩支燃料罐、手上噴嘴 */
+function flameMan(ctx: Ctx, f: Faction) {
+  ctx.translate(9, 9);
+  ctx.strokeStyle = OUT;
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#5a4e36";
+  ctx.beginPath();
+  ctx.ellipse(-1, 0, 4.5, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#d9661f";
+  for (const y of [-4, 1]) {
+    ctx.fillRect(-8.5, y, 4, 3.6);
+    ctx.strokeRect(-8.5, y, 4, 3.6);
+  }
+  ctx.strokeStyle = "#3a3a32";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(1, 3);
+  ctx.lineTo(8.5, 3);
+  ctx.stroke();
+  ctx.fillStyle = "#ff9a3c";
+  ctx.beginPath();
+  ctx.arc(9, 3, 1.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = OUT;
+  ctx.fillStyle = f.css;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.arc(0, 0, 4.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+}
+
+/** 裝甲車：四輪、斜面車頭、小砲塔 */
+function armoredCar(ctx: Ctx, f: Faction) {
+  ctx.translate(22, 13);
+  for (const [x, y] of [[-12, -12], [8, -12], [-12, 8], [8, 8]]) {
+    const w = new Path2D();
+    w.roundRect(x, y, 9, 5, 2);
+    fillStroke(ctx, w, "#2f302a", 1);
+  }
+  const body = new Path2D();
+  body.moveTo(-17, -9);
+  body.lineTo(12, -9);
+  body.lineTo(19, -4);
+  body.lineTo(19, 4);
+  body.lineTo(12, 9);
+  body.lineTo(-17, 9);
+  body.closePath();
+  fillStroke(ctx, body, f.css, 2);
+  const g = ctx.createLinearGradient(0, -9, 0, 9);
+  g.addColorStop(0, "rgba(255,255,255,0.25)");
+  g.addColorStop(1, "rgba(0,0,0,0.25)");
+  ctx.fillStyle = g;
+  ctx.fill(body);
+  ctx.strokeStyle = "#2a2a24";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(2, 0);
+  ctx.lineTo(16, 0);
+  ctx.stroke();
+  const tur = new Path2D();
+  tur.arc(-1, 0, 5.5, 0, Math.PI * 2);
+  fillStroke(ctx, tur, shade(f.css, -0.12), 1.5);
+}
+
+/** 防空砲車：卡車＋後面平台上的雙聯裝砲 */
+function flakTruck(ctx: Ctx, f: Faction) {
+  ctx.translate(23, 13);
+  for (const [x, y] of [[-16, -12], [-6, -12], [10, -12], [-16, 8], [-6, 8], [10, 8]]) {
+    const w = new Path2D();
+    w.roundRect(x, y, 7, 4.5, 2);
+    fillStroke(ctx, w, "#2f302a", 1);
+  }
+  const bed = new Path2D();
+  bed.rect(-19, -9, 26, 18);
+  fillStroke(ctx, bed, shade(f.css, -0.08), 2);
+  const cab = new Path2D();
+  cab.roundRect(8, -8, 12, 16, 2);
+  fillStroke(ctx, cab, f.css, 2);
+  ctx.fillStyle = "rgba(170,210,230,0.8)";
+  ctx.fillRect(16, -6, 3, 12);
+  const base = new Path2D();
+  base.arc(-6, 0, 6, 0, Math.PI * 2);
+  fillStroke(ctx, base, "#55574e", 1.4);
+  for (const off of [-2.5, 2.5]) {
+    const b = new Path2D();
+    b.rect(-6, off - 1.2, 18, 2.4);
+    fillStroke(ctx, b, "#2b2c27", 1);
+  }
+}
+
+/** 補給箱（降落傘吊著的木箱） */
+function crate(ctx: Ctx) {
+  ctx.translate(16, 16);
+  const box = new Path2D();
+  box.rect(-11, -11, 22, 22);
+  fillStroke(ctx, box, "#b07a3a", 2.5);
+  ctx.strokeStyle = "#7a4f20";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-11, -11);
+  ctx.lineTo(11, 11);
+  ctx.moveTo(11, -11);
+  ctx.lineTo(-11, 11);
+  ctx.stroke();
+  ctx.fillStyle = "#f2c14e";
+  ctx.fillRect(-11, -3, 22, 6);
+  ctx.strokeStyle = OUT;
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(-11, -3, 22, 6);
 }
 
 function bunker(ctx: Ctx, f: Faction) {
@@ -597,6 +864,11 @@ export function makeTextures(scene: Phaser.Scene) {
     canvasTex(scene, `hq${i}`, 120, 120, (c) => hq(c, f));
     canvasTex(scene, `bunker${i}`, 48, 48, (c) => bunker(c, f));
     canvasTex(scene, `fort${i}`, 80, 80, (c) => fort(c, f));
+    for (const spec of ["battery", "barracks", "depot", "flak", "hospital"]) canvasTex(scene, `fort${i}_${spec}`, 80, 80, (c) => fort(c, f, spec));
+    canvasTex(scene, `sniper${i}`, 24, 18, (c) => sniperMan(c, f));
+    canvasTex(scene, `flame${i}`, 20, 18, (c) => flameMan(c, f));
+    canvasTex(scene, `car${i}`, 44, 26, (c) => armoredCar(c, f));
+    canvasTex(scene, `flakv${i}`, 46, 26, (c) => flakTruck(c, f));
     canvasTex(scene, `atnest${i}`, 52, 52, (c) => atNest(c, f));
     canvasTex(scene, `aa${i}`, 48, 48, (c) => aaBase(c, f));
     canvasTex(scene, `bomber${i}`, 116, 108, (c) => drawPlane(c, BOMBER, f, 1));
@@ -628,6 +900,7 @@ export function makeTextures(scene: Phaser.Scene) {
   canvasTex(scene, "mggun", 28, 14, mgGun);
   canvasTex(scene, "aagun", 30, 24, aaGun);
   canvasTex(scene, "chute", 56, 56, chute);
+  canvasTex(scene, "crate", 32, 32, crate);
   canvasTex(scene, "wreck", 56, 38, (c) => {
     c.translate(28, 19);
     for (const y of [-17, 9]) {

@@ -4,8 +4,15 @@ import {
   AIRCRAFT,
   AIR_KINDS,
   BUILD_KINDS,
+  BARRACKS_CAP,
+  BARRACKS_DISCOUNT,
+  BATTERY_CAP,
+  EVENTS,
   FACTIONS,
+  FORT_SPECS,
+  FORT_SPEC_DEFS,
   GARRISON_CAP,
+  UNIT_GROUPS,
   MAX_UPGRADE_LEVEL,
   POP_CAP,
   STRUCTURES,
@@ -16,6 +23,8 @@ import {
   WINNER_DRAW,
   buildMap,
   type AirKind,
+  type EventKind,
+  type FortSpec,
   type MapLayout,
   type UnitType,
 } from "@frontline/shared";
@@ -45,6 +54,7 @@ export class Hud {
   private feed = $("feed");
   private buildMenu = $("build-menu");
   private groupBar = $("group-bar");
+  private tab = 0; // 兵種分頁
   private targetHint = $("target-hint");
   private result = $("result");
   private map: MapLayout | null = null;
@@ -75,6 +85,24 @@ export class Hud {
       bus.on("fortFallen", (m: { node: number; owner: string; faction: number; by: string }) => this.onFortFallen(m)),
       bus.on("airDown", (m: { kind: AirKind }) => this.addFeed(`${AIRCRAFT[m.kind].name === "空降" ? "運輸機" : "轟炸機"}被擊落！`, "#ff9a5c")),
       bus.on("newBattle", () => this.resetForBattle()),
+      bus.on("event", (m: { kind: EventKind; players?: string[] }) => this.onEvent(m)),
+      bus.on("eventEnd", () => this.addFeed("事件結束", "#bfb9a6")),
+      bus.on("crateTaken", (m: { by: string; faction: number; amount: number }) => {
+        const f = FACTIONS[m.faction];
+        if (m.by === session.myId) {
+          this.addFeed(`搶到補給箱 +$${m.amount}`, "#f2c14e");
+          play("capture", 0.7);
+        } else this.addFeed(`${f?.name ?? ""}搶到補給箱`, f?.light);
+      }),
+      bus.on("built", (m: { owner: string; kind: string }) => {
+        if (m.owner === session.myId) this.addFeed(`${STRUCTURES[m.kind as keyof typeof STRUCTURES]?.name ?? "工事"}完工`, "#7ed957");
+      }),
+      bus.on("converted", (m: { node: number; spec: string; owner: string }) => {
+        if (m.owner !== session.myId) return;
+        const def = FORT_SPEC_DEFS[m.spec as Exclude<FortSpec, "">];
+        if (def) this.addFeed(`${this.map?.nodes[m.node]?.name ?? "堡壘"}改建成${def.name}`, "#7ed957");
+        play("deploy", 0.6);
+      }),
     );
     window.addEventListener("keydown", this.onKey);
     this.bottom.addEventListener("click", this.onClick);
@@ -181,7 +209,7 @@ export class Hud {
       .join("");
     if (!this.top.querySelector(".pcards")) {
       this.top.innerHTML = `<div class="pcards"></div>
-        <div class="timer"><strong></strong><span>剩餘時間</span></div>
+        <div class="timer"><strong></strong><span>剩餘時間</span><em class="event-chip hidden"></em></div>
         <div class="funds"><strong></strong><span class="fsub"></span>
           <span class="top-btns"><button class="btn small icon" data-act="music" aria-label="關配樂"></button><button class="btn small icon" data-act="mute" aria-label="靜音"></button><button class="btn small icon" data-act="fs" aria-label="全螢幕"></button></span></div>`;
       this.top.querySelector<HTMLButtonElement>('[data-act="mute"]')!.onclick = () => toggleMute();
@@ -195,6 +223,14 @@ export class Hud {
         if (tip) this.showToast(tip, 5000);
       };
     }
+    // 進行中的隨機事件
+    const chip = this.top.querySelector<HTMLElement>(".event-chip")!;
+    const ev = s.event ? EVENTS[s.event as EventKind] : undefined;
+    if (ev) {
+      setText(chip, `${ev.name} ${Math.max(0, Math.ceil(s.eventEnd - s.time))}s`);
+      chip.title = ev.desc;
+    }
+    chip.classList.toggle("hidden", !ev);
     const pc = this.top.querySelector<HTMLElement>(".pcards")!;
     if (pc.dataset.html !== cards) {
       pc.dataset.html = cards;
@@ -243,7 +279,8 @@ export class Hud {
     this.builtFor = this.mapId;
     const units = UNIT_TYPES.map((t) => {
       const d = UNITS[t];
-      return `<div class="ucard" data-type="${t}" title="${d.name}：${d.short}（人口 ${d.pop}）">
+      const gi = UNIT_GROUPS.findIndex((g) => g.types.includes(t));
+      return `<div class="ucard" data-type="${t}" data-group="${gi}" title="${d.name}：${d.short}（人口 ${d.pop}）">
         <button class="ubuy" data-buy="${t}"><b>${d.hotkey}</b><span class="cn">${d.name}</span><span class="cc">$${d.cost}</span></button>
         <button class="upick" data-pick="${t}" aria-label="選要派出幾支${d.name}"><span class="pk-n">0</span><span class="pk-of">/0</span></button>
       </div>`;
@@ -266,7 +303,9 @@ export class Hud {
               <button class="fort-toggle" data-act="enter" aria-pressed="true"></button>
               <button data-act="pick-all">全選</button>
               <button data-act="pick-none">清除</button>
+              <button class="fort-spec" data-act="spec">改建</button>
             </div>
+            <div class="spec-pop"></div>
             <p class="fort-tip">${isMobile() ? "從據點拖到目的地派兵" : "從據點拖到目的地派兵・沒選數量＝全部派出"}</p>
           </div>
         </div>
@@ -277,7 +316,10 @@ export class Hud {
         </div>
       </div>
       <div class="hud-col right">
-        <div class="hud-group g-units"><span class="hud-label">買兵<br>派出數量</span>${units}</div>
+        <div class="hud-group g-units"><span class="hud-label">買兵<br>派出數量</span>
+          <div class="utabs">${UNIT_GROUPS.map((g, i) => `<button data-tab="${i}">${g.name}<i data-tab-n="${i}"></i></button>`).join("")}</div>
+          <div class="ucards">${units}</div>
+        </div>
       </div>`;
   }
 
@@ -318,10 +360,28 @@ export class Hud {
     s.units.forEach((u) => {
       if (u.owner === me.id && u.inNode === node) used += UNITS[u.type as UnitType]?.pop ?? 1;
     });
-    const cap = n ? GARRISON_CAP[n.kind] ?? GARRISON_CAP.fort : 0;
-    setText(this.bottom.querySelector("[data-fort-name]")!, node >= 0 ? this.nodeName(node) : "沒有據點");
+    const specOn = n && n.spec && s.time >= n.specAt ? (n.spec as FortSpec) : "";
+    const cap = n ? (GARRISON_CAP[n.kind] ?? GARRISON_CAP.fort) + (specOn === "barracks" ? BARRACKS_CAP : specOn === "battery" ? BATTERY_CAP : 0) : 0;
+    const specName = specOn ? FORT_SPEC_DEFS[specOn as Exclude<FortSpec, "">].name : "";
+    setText(this.bottom.querySelector("[data-fort-name]")!, node >= 0 ? `${this.nodeName(node)}${specName ? `・${specName}` : ""}` : "沒有據點");
     const grace = n ? Math.ceil(n.incomeAt - s.time) : 0;
-    setText(this.bottom.querySelector("[data-fort-sub]")!, n ? `駐軍 ${used}/${cap}${grace > 0 ? `・整頓 ${grace}s` : ""}` : "");
+    const converting = n && n.spec ? Math.ceil(n.specAt - s.time) : 0;
+    setText(
+      this.bottom.querySelector("[data-fort-sub]")!,
+      n ? `駐軍 ${used}/${cap}${converting > 0 ? `・改建 ${converting}s` : ""}${grace > 0 ? `・整頓 ${grace}s` : ""}` : "",
+    );
+    const specBtn = this.bottom.querySelector<HTMLButtonElement>('[data-act="spec"]')!;
+    specBtn.disabled = !n || n.kind === "hq" || converting > 0;
+    setText(specBtn, n?.kind === "hq" ? "大本營" : converting > 0 ? `改建中` : "改建");
+    if (specBtn.disabled) this.bottom.querySelector(".g-fort")?.classList.remove("spec-open");
+    // 兵種分頁
+    const groupCount = UNIT_GROUPS.map((g) => g.types.reduce((a, t) => a + have[UNIT_TYPES.indexOf(t)], 0));
+    this.bottom.querySelectorAll<HTMLElement>("[data-tab]").forEach((b) => {
+      const i = Number(b.dataset.tab);
+      b.classList.toggle("on", i === this.tab);
+      const badge = b.querySelector("i")!;
+      setText(badge as HTMLElement, groupCount[i] > 0 ? `${groupCount[i]}` : "");
+    });
     const tog = this.bottom.querySelector<HTMLElement>('[data-act="enter"]')!;
     setText(tog, session.enter ? "佔領後進駐 ✓" : "佔領後進駐 ✗");
     tog.classList.toggle("on", session.enter);
@@ -332,7 +392,10 @@ export class Hud {
       if (!card) return;
       const d = UNITS[t];
       const full = used + d.pop > cap || me.pop + d.pop > POP_CAP;
-      card.classList.toggle("poor", me.funds < d.cost);
+      const price = specOn === "barracks" ? Math.round(d.cost * BARRACKS_DISCOUNT) : d.cost;
+      setText(card.querySelector(".cc")!, `$${price}`);
+      card.classList.toggle("off", Number(card.dataset.group) !== this.tab);
+      card.classList.toggle("poor", me.funds < price);
       card.classList.toggle("full", full);
       card.classList.toggle("has", have[i] > 0);
       card.classList.toggle("picked", session.picks[i] > 0);
@@ -434,6 +497,25 @@ export class Hud {
       play("click");
       return;
     }
+    if (el.dataset.tab !== undefined) {
+      this.tab = Number(el.dataset.tab);
+      play("click", 0.4);
+      return;
+    }
+    if (el.dataset.act === "spec") {
+      const box = this.bottom.querySelector(".g-fort")!;
+      const open = !box.classList.contains("spec-open");
+      box.classList.toggle("spec-open", open);
+      if (open) this.renderSpecPop();
+      play("click", 0.5);
+      return;
+    }
+    if (el.dataset.spec !== undefined) {
+      session.send("convert", { node: session.selectedNode, spec: el.dataset.spec });
+      this.bottom.querySelector(".g-fort")?.classList.remove("spec-open");
+      play("click", 0.7);
+      return;
+    }
     if (el.dataset.buy) this.buy(el.dataset.buy as UnitType, e.shiftKey ? 5 : 1, el);
     else if (el.dataset.pick) this.pick(el.dataset.pick as UnitType, 1, true);
     else if (el.dataset.act === "pick-all") this.pickAll();
@@ -450,6 +532,25 @@ export class Hud {
     }
     if (!el.dataset.up) this.bottom.querySelector(".g-ups")?.classList.remove("open");
   };
+
+  /** 改建選單：五種堡壘＋改回標準 */
+  private renderSpecPop() {
+    const s = session.state!;
+    const n = s.nodes[session.selectedNode];
+    const cur = n?.spec ?? "";
+    const me = session.me();
+    const rows = [
+      ...FORT_SPECS.map((k) => {
+        const d = FORT_SPEC_DEFS[k];
+        const poor = (me?.funds ?? 0) < d.cost;
+        return `<button class="spec-row${cur === k ? " cur" : ""}${poor ? " poor" : ""}" data-spec="${k}"${cur === k ? " disabled" : ""}>
+          <span class="sr-icon sr-${k}"></span><b>${d.name}</b><em>$${d.cost}</em><small>${d.short}</small></button>`;
+      }),
+      `<button class="spec-row${cur === "" ? " cur" : ""}" data-spec=""${cur === "" ? " disabled" : ""}><span class="sr-icon"></span><b>標準堡壘</b><em>免費</em><small>拆掉改建，回到一般堡壘</small></button>`,
+    ].join("");
+    const pop = this.bottom.querySelector<HTMLElement>(".spec-pop")!;
+    pop.innerHTML = `<p class="sp-title">改建 ${this.nodeName(session.selectedNode)}<span>要 10 秒，期間沒有特殊效果；被攻破會變回標準堡壘</span></p>${rows}`;
+  }
 
   /** 右鍵點數量 = 減一 */
   private onContext = (e: MouseEvent) => {
@@ -557,9 +658,10 @@ export class Hud {
     }
     if (k === "A") return this.pickAll();
     // 數字鍵：買兵（Shift + 數字 = 多選一支要派出的）
-    const code = /^Digit(\d)$/.exec(e.code)?.[1];
+    const code = /^Digit(\d)$/.exec(e.code)?.[1] ?? (e.code === "Minus" ? "-" : undefined);
     const unit = UNIT_TYPES.find((t) => UNITS[t].hotkey === (code ?? k));
     if (unit) {
+      this.tab = Math.max(0, UNIT_GROUPS.findIndex((g) => g.types.includes(unit)));
       if (e.shiftKey) return this.pick(unit, 1, false);
       return this.buy(unit, 1, this.bottom.querySelector(`[data-buy="${unit}"]`));
     }
@@ -587,11 +689,11 @@ export class Hud {
     }
     const me = session.me();
     this.buildMenu.innerHTML =
-      `<p>蓋工事</p>` +
+      `<p>蓋工事<small style="display:block;color:#a89f84;font-weight:500;font-size:11px">要施工一段時間，派工兵到旁邊會蓋得比較快</small></p>` +
       BUILD_KINDS.map((k) => {
         const d = STRUCTURES[k];
         const poor = (me?.funds ?? 0) < d.cost;
-        return `<button data-build="${k}" data-lane="${m.lane}" data-node="${m.node}" data-slot="${m.slot}"${poor ? ' style="opacity:.6"' : ""}><span>${d.name}<br><small style="color:#a89f84;font-weight:500">${d.short}</small></span><em>$${d.cost}</em></button>`;
+        return `<button data-build="${k}" data-lane="${m.lane}" data-node="${m.node}" data-slot="${m.slot}"${poor ? ' style="opacity:.6"' : ""}><span>${d.name}<br><small style="color:#a89f84;font-weight:500">${d.short}・施工 ${d.buildTime ?? 10} 秒</small></span><em>$${d.cost}</em></button>`;
       }).join("");
     const w = 220;
     this.buildMenu.style.left = `${Math.min(window.innerWidth - w - 8, m.x + 12)}px`;
@@ -616,14 +718,41 @@ export class Hud {
     this.toastTimer = window.setTimeout(() => this.toast.classList.remove("show"), ms);
   }
 
-  showBanner(kind: string, text: string, sub?: string, color?: string) {
+  /** 大提示字：顯示在上方，點一下就關掉，幾秒後自己消失 */
+  showBanner(kind: string, text: string, sub?: string, color?: string, ms = 2400) {
     const div = document.createElement("div");
     div.className = `b ${kind}`;
+    div.setAttribute("role", "status");
+    div.title = "點一下關閉";
     if (color) div.style.setProperty("--fc", color);
-    div.innerHTML = `${text}${sub ? `<small>${sub}</small>` : ""}`;
+    div.style.setProperty("--life", `${ms}ms`);
+    div.innerHTML = `${text}${sub ? `<small>${sub}</small>` : ""}<span class="b-x" aria-hidden="true">✕</span>`;
+    const close = () => {
+      div.classList.add("closing");
+      setTimeout(() => div.remove(), 180);
+    };
+    div.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      close();
+    });
     this.banner.innerHTML = "";
     this.banner.appendChild(div);
-    setTimeout(() => div.remove(), 2800);
+    setTimeout(() => div.isConnected && div.remove(), ms + 400);
+  }
+
+  private onEvent(m: { kind: EventKind; players?: string[] }) {
+    const ev = EVENTS[m.kind];
+    if (!ev) return;
+    if (m.kind === "reinforce") {
+      const mine = m.players?.includes(session.myId);
+      if (mine) this.showBanner("gold", "援軍抵達！", "大本營多了 2 個步兵班、1 個機槍組", undefined, 3500);
+      else this.addFeed(`援軍抵達：堡壘最少的玩家獲得援軍`, "#f2c14e");
+      play("event", 0.8);
+      return;
+    }
+    const danger = m.kind === "barrage" || m.kind === "storm";
+    this.showBanner(danger ? "red" : "gold", ev.name, ev.desc, undefined, 3500);
+    play(m.kind === "barrage" ? "siren" : "event", 0.8);
   }
 
   addFeed(text: string, color = "#f2c14e") {
@@ -681,7 +810,7 @@ export class Hud {
     const f = FACTIONS[m.faction];
     const name = this.map?.nodes[m.node]?.name ?? "堡壘";
     if (m.by === session.myId) {
-      this.showBanner("gold", `佔領 ${name}！`, "多一個出兵點，15 秒後開始產錢");
+      this.showBanner("gold", `佔領 ${name}！`, "15 秒後開始產錢・可以在據點面板「改建」");
       play("capture", 1);
     } else {
       this.addFeed(`${f?.name ?? ""}佔領了${name}`, f?.light);

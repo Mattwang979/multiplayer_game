@@ -5,7 +5,9 @@ import {
   AIR_KINDS,
   BOMB,
   BUILD_SLOTS,
+  FORT_SPEC_DEFS,
   MAX_UPGRADE_LEVEL,
+  UNIT_TYPES,
   STRUCTURES,
   UNITS,
   UPGRADES,
@@ -13,9 +15,11 @@ import {
   nodeDistance,
   nodeEnd,
   nodeDir,
+  roadDistance,
   upkeepFor,
   type AirKind,
   type BuildKind,
+  type FortSpec,
   type UnitType,
 } from "@frontline/shared";
 import type { Battle } from "./Battle";
@@ -36,6 +40,7 @@ export class BotBrain {
   private target = -1;
   private targetUntil = 0;
   private nextRegroup = 8;
+  private chasedCrates = new Set<string>();
 
   constructor(
     public playerId: string,
@@ -67,6 +72,8 @@ export class BotBrain {
     this.defend(battle, p, threats);
     this.buy(battle, p, owned, threats);
     this.attack(battle, p, owned);
+    this.chaseCrates(battle, p);
+    if (this.rng() < 0.15) this.tryConvert(battle, p, owned);
     if (s.time >= this.nextRegroup) {
       this.nextRegroup = s.time + 5 + this.rng() * 4;
       this.regroup(battle, p);
@@ -148,18 +155,56 @@ export class BotBrain {
   private chooseUnit(battle: Battle, threat: Threat | undefined): UnitType {
     const s = battle.state;
     if (threat && threat.hard >= 200 && this.rng() < 0.7) return "at";
-    if (threat && threat.soft >= 250 && this.rng() < 0.4) return "mg";
+    if (threat && threat.soft >= 250 && this.rng() < 0.4) return this.rng() < 0.5 ? "mg" : "flame";
     const t = this.target >= 0 ? s.nodes[this.target] : undefined;
     const enemyFort = !!t && !!t.owner && t.hp > 0;
+    if (enemyFort && this.rng() < 0.2) return "engineer";
+    if (!enemyFort && s.time < 120 && this.rng() < 0.25) return "car"; // 開局用裝甲車搶點
+    const sawAir = this.sawEnemyAir > 0 && s.time - this.sawEnemyAir < 60;
+    if (sawAir && this.rng() < 0.15) return "flak";
+    const weights: [UnitType, number][] = [
+      ["rifle", 22], ["mg", 11], ["sniper", 7], ["flame", 7], ["car", 7], ["tank", 13],
+      ["at", 8], ["flak", 3], ["artillery", 5], ["engineer", 8], ["medic", 9],
+    ];
+    let roll = this.rng() * weights.reduce((a, [, w]) => a + w, 0);
+    for (const [type, w] of weights) {
+      roll -= w;
+      if (roll <= 0) return type;
+    }
+    return "rifle";
+  }
+
+  /** 補給箱：派最近的閒置部隊去撿 */
+  private chaseCrates(battle: Battle, p: Player) {
+    const s = battle.state;
+    s.crates.forEach((c) => {
+      if (this.chasedCrates.has(c.id)) return;
+      let best: Unit | null = null;
+      let bestD = 520;
+      s.units.forEach((u) => {
+        if (u.owner !== p.id || u.inNode >= 0 || u.hp <= 0 || u.mode === "retreat" || u.attacking) return;
+        const d = roadDistance(battle.map, u.lane, u.x, c.lane, c.x);
+        if (d < bestD) {
+          bestD = d;
+          best = u;
+        }
+      });
+      if (!best) return;
+      this.chasedCrates.add(c.id);
+      battle.order(this.playerId, [(best as Unit).id], [], { lane: c.lane, x: c.x }, true);
+    });
+  }
+
+  /** 有閒錢就把堡壘改建（補給站、砲台、兵營為主） */
+  private tryConvert(battle: Battle, p: Player, owned: number[]) {
+    const s = battle.state;
+    const forts = owned.filter((i) => s.nodes[i].kind !== "hq" && !s.nodes[i].spec);
+    if (!forts.length) return;
+    const node = forts[Math.floor(this.rng() * forts.length)];
     const roll = this.rng();
-    if (enemyFort && roll < 0.2) return "engineer";
-    if (roll < 0.36) return "rifle";
-    if (roll < 0.5) return "mg";
-    if (roll < 0.66) return "tank";
-    if (roll < 0.76) return "at";
-    if (roll < 0.86) return "medic";
-    if (roll < 0.93) return "engineer";
-    return "artillery";
+    const spec: FortSpec = roll < 0.35 ? "depot" : roll < 0.65 ? "battery" : roll < 0.85 ? "barracks" : roll < 0.95 ? "hospital" : "flak";
+    if (p.fundsExact < FORT_SPEC_DEFS[spec].cost + 250) return;
+    battle.convert(this.playerId, node, spec);
   }
 
   private buy(battle: Battle, p: Player, owned: number[], threats: Threat[]) {
@@ -204,7 +249,7 @@ export class BotBrain {
       if (inside.length <= keep) continue;
       const counts = new Map<UnitType, number>();
       inside.slice(keep).forEach((u) => counts.set(u.type as UnitType, (counts.get(u.type as UnitType) ?? 0) + 1));
-      const arr = ["rifle", "mg", "at", "tank", "artillery", "engineer", "medic"].map((t) => counts.get(t as UnitType) ?? 0);
+      const arr = UNIT_TYPES.map((t) => counts.get(t) ?? 0);
       battle.dispatch(this.playerId, node, arr, [], { node: this.target }, true);
     }
   }

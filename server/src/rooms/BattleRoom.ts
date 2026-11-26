@@ -1,7 +1,9 @@
 // 一個房間 = 一局遊戲。負責大廳（加入、加電腦、開始）、轉送玩家指令給模擬、斷線代管。
 import { Room, matchMaker, type Client } from "colyseus";
 import {
+  FORT_SPECS,
   KICK_CODE,
+  type FortSpec,
   type Dest,
   AIR_KINDS,
   MAPS,
@@ -94,6 +96,11 @@ export class BattleRoom extends Room<{ state: BattleState }> {
     },
 
     // ---------- 戰鬥指令 ----------
+    convert: (client: Client, msg: { node?: number; spec?: string }) => {
+      const spec = typeof msg?.spec === "string" ? (msg.spec as FortSpec) : null;
+      if (spec === null || (spec !== "" && !FORT_SPECS.includes(spec))) return;
+      this.reply(client, this.battle.convert(client.sessionId, num(msg?.node), spec));
+    },
     buy: (client: Client, msg: { node?: number; type?: string; count?: number }) => {
       const type = msg?.type as UnitType;
       if (!UNIT_TYPES.includes(type)) return;
