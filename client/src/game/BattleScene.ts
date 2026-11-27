@@ -124,6 +124,7 @@ interface StructView {
 
 interface NodeView {
   img: Phaser.GameObjects.Image;
+  glow: Phaser.GameObjects.Image; // 領土光暈（陣營色）
   label: Phaser.GameObjects.Text;
   badge: Phaser.GameObjects.Text; // 自己據點的駐軍數
   key: string; // 目前的外觀（換主人時重畫）
@@ -302,6 +303,7 @@ export class BattleScene extends Phaser.Scene {
     this.planes.clear();
     this.nodes.forEach((n) => {
       n.img.destroy();
+      n.glow.destroy();
       n.label.destroy();
       n.badge.destroy();
     });
@@ -334,13 +336,14 @@ export class BattleScene extends Phaser.Scene {
       const below = nd.y < 300;
       const hq = nd.kind === "hq";
       const label = this.add
-        .text(nd.x, nd.y + (below ? 1 : -1) * (hq ? (M() ? 96 : 80) : M() ? 66 : 52), "", {
+        .text(nd.x, nd.y + (below ? 1 : -1) * (hq ? (M() ? 98 : 82) : M() ? 70 : 56), "", {
           fontFamily: '"Noto Sans TC", sans-serif',
           fontSize: M() ? (hq ? "30px" : "24px") : hq ? "18px" : "14px",
           fontStyle: "900",
           color: "#ffffff",
-          stroke: "#1d1d17",
-          strokeThickness: M() ? 7 : 5,
+          // 深色名牌：在亮地面和暗地面上都看得清楚
+          backgroundColor: "rgba(21,24,18,0.86)",
+          padding: M() ? { x: 9, y: 3 } : { x: 6, y: 2 },
         })
         .setOrigin(0.5)
         .setDepth(DEPTH.bars + 1);
@@ -356,7 +359,13 @@ export class BattleScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setDepth(DEPTH.bars + 2)
         .setVisible(false);
-      this.nodes.push({ img, label, badge, key: "", shots: 0, airShots: 0, hp: 0, wx: nd.x, wy: nd.y, big: !!nd.big || hq });
+      const glow = this.add
+        .image(nd.x, nd.y, "glow0")
+        .setDepth(DEPTH.ground + 0.5)
+        .setDisplaySize(hq ? 560 : nd.big ? 460 : 400, hq ? 560 : nd.big ? 460 : 400)
+        .setAlpha(0)
+        .setVisible(false);
+      this.nodes.push({ img, glow, label, badge, key: "", shots: 0, airShots: 0, hp: 0, wx: nd.x, wy: nd.y, big: !!nd.big || hq });
     });
   }
 
@@ -365,7 +374,7 @@ export class BattleScene extends Phaser.Scene {
     const def = this.map.def;
     const theme = def.theme;
     const look = GROUND[theme];
-    const key = `margin2-${theme}`;
+    const key = `margin3-${theme}`;
     const T = 512;
     if (!this.textures.exists(key)) {
       const tex = this.textures.createCanvas(key, T, T)!;
@@ -400,6 +409,7 @@ export class BattleScene extends Phaser.Scene {
           });
         }
       }
+      c.drawImage(groundNoise(theme, T, T, 0, 0), 0, 0, T, T);
       for (let i = 0; i < 430; i++) {
         const [x, y, lean, h, pick] = [R(0, T), R(0, T), R(-2, 2), R(3, 6), rand()];
         wrap((ox, oy) => {
@@ -526,6 +536,11 @@ export class BattleScene extends Phaser.Scene {
         c.stroke();
       }
     }
+    // 大塊明暗和細砂（跟外圍貼圖同一個週期，接起來是連續的）
+    c.save();
+    c.imageSmoothingEnabled = true;
+    c.drawImage(groundNoise(theme, WORLD_W, WORLD_H, MARGIN_X, MARGIN_Y), 0, 0, WORLD_W, WORLD_H);
+    c.restore();
     // 細碎草葉／小石子
     for (let i = 0; i < 2600; i++) {
       const x = R(0, WORLD_W);
@@ -654,28 +669,49 @@ export class BattleScene extends Phaser.Scene {
 
     // 道路與橋
     const nearRiver = (p: Vec) => riverPts.length > 0 && distToPolyline(p, riverPts) < 44;
+    // 先畫所有道路的影子，交叉口才不會蓋到別條路面
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    c.save();
+    c.translate(0, 7);
+    for (const lane of this.map.lanes) {
+      strokePath(lane.pts);
+      c.strokeStyle = "rgba(58,42,18,0.3)";
+      c.lineWidth = 54;
+      c.stroke();
+    }
+    c.restore();
     for (const lane of this.map.lanes) {
       c.lineCap = "round";
       c.lineJoin = "round";
       strokePath(lane.pts);
-      c.strokeStyle = "#9b804f";
+      c.strokeStyle = "#8f7447";
       c.lineWidth = 50;
       c.stroke();
       strokePath(lane.pts);
-      c.strokeStyle = theme === "desert" ? "#c4a870" : "#b79a63";
+      c.strokeStyle = theme === "desert" ? "#d6bf8a" : "#c6ae7a";
       c.lineWidth = 42;
       c.stroke();
-      for (const off of [-8, 8]) {
+      // 車轍（淡）和中線（虛線）
+      for (const off of [-11, 11]) {
         c.beginPath();
         for (let x = 0; x <= lane.len; x += 10) {
           const p = laneOffsetPoint(lane, x, off);
           if (x) c.lineTo(p.x, p.y);
           else c.moveTo(p.x, p.y);
         }
-        c.strokeStyle = "rgba(140,112,70,0.5)";
-        c.lineWidth = 3;
+        c.strokeStyle = "rgba(140,112,70,0.28)";
+        c.lineWidth = 2.5;
         c.stroke();
       }
+      strokePath(lane.pts);
+      c.save();
+      c.setLineDash([14, 12]);
+      c.lineCap = "butt";
+      c.strokeStyle = "rgba(150,124,80,0.75)";
+      c.lineWidth = 3;
+      c.stroke();
+      c.restore();
       // 經過河流的地方畫木橋
       const bridge: Vec[] = [];
       for (let x = 0; x <= lane.len; x += 4) {
@@ -872,6 +908,17 @@ export class BattleScene extends Phaser.Scene {
         const scale = (n.kind === "hq" ? 1 : v.big ? 1.3 : 1) * (M() ? 1.15 : 1);
         v.img.setTexture(tex).setScale(scale).setAlpha(owned ? 1 : 0.92);
         v.label.setText(label).setColor(owner ? FACTIONS[owner.faction].light : "#f4f1e6");
+        // 領土光暈：換主人時淡入新顏色
+        this.tweens.killTweensOf(v.glow);
+        if (owner) {
+          // WebGL 用白色光暈上色（顏色最準）；Canvas 模式不一定支援上色，用畫好顏色的貼圖
+          if (this.game.renderer.type === Phaser.WEBGL) v.glow.setTexture("glow").setTint(GLOW[owner.faction] ?? 0xffffff);
+          else v.glow.setTexture(`glow${owner.faction}`);
+          v.glow.setVisible(true);
+          this.tweens.add({ targets: v.glow, alpha: GLOW_ALPHA[owner.faction] ?? 0.3, duration: 600 });
+        } else {
+          this.tweens.add({ targets: v.glow, alpha: 0, duration: 400, onComplete: () => v.glow.setVisible(false) });
+        }
         // 靠近地圖邊緣時把名字往內推，不要被切掉
         const half = v.label.width / 2 + 6;
         v.label.setX(Math.max(half, Math.min(WORLD_W - half, nd.x)));
@@ -2319,6 +2366,83 @@ function drawRiver(c: CanvasRenderingContext2D, pts: Vec[]) {
 }
 
 type GroundLook = (typeof GROUND)[string];
+
+/** 領土光暈顏色：黑鷹旅用灰色（純黑會把地面弄髒），雪原旅的白在亮地面上要濃一點 */
+const GLOW = [0x4f86e8, 0xf26b21, 0x6b6b6b, 0xffffff];
+const GLOW_ALPHA = [0.3, 0.3, 0.3, 0.42];
+
+/** 大塊明暗的顏色（暗、亮） */
+const NOISE_TINT: Record<string, [number[], number[]]> = {
+  desert: [[120, 88, 44], [250, 236, 196]],
+  grass: [[62, 88, 32], [214, 230, 158]],
+  river: [[62, 88, 32], [214, 230, 158]],
+  highland: [[78, 84, 54], [222, 226, 190]],
+};
+const noiseCache = new Map<string, Float32Array[]>();
+
+/**
+ * 地面的大塊明暗和細砂，週期 512：世界座標 (x, y) 取 ((x + ox) mod 512, (y + oy) mod 512)，
+ * 地圖用 (MARGIN_X, MARGIN_Y) 偏移、外圍貼圖從 0 開始，兩邊就會接成同一片。
+ * 為了快，用一半解析度算，畫的時候放大兩倍（本來就是柔和的大塊，看不出差別）。
+ */
+function groundNoise(theme: string, w: number, h: number, ox: number, oy: number) {
+  const P = 512;
+  let grids = noiseCache.get(theme);
+  if (!grids) {
+    const rand = mulberry(theme.length * 7919 + 3);
+    grids = [4, 8, 32].map((n) => Float32Array.from({ length: n * n }, () => rand()));
+    grids.push(Float32Array.from({ length: 256 * 256 }, () => rand())); // 細砂
+    noiseCache.set(theme, grids);
+  }
+  const [g4, g8, g32, grit] = grids;
+  const octave = (grid: Float32Array, n: number, u: number, v: number) => {
+    const cell = P / n;
+    const gx = u / cell;
+    const gy = v / cell;
+    const x0 = Math.floor(gx);
+    const y0 = Math.floor(gy);
+    let tx = gx - x0;
+    let ty = gy - y0;
+    tx = tx * tx * (3 - 2 * tx);
+    ty = ty * ty * (3 - 2 * ty);
+    const xa = x0 % n;
+    const xb = (x0 + 1) % n;
+    const ya = (y0 % n) * n;
+    const yb = ((y0 + 1) % n) * n;
+    const top = grid[ya + xa] + (grid[ya + xb] - grid[ya + xa]) * tx;
+    const bot = grid[yb + xa] + (grid[yb + xb] - grid[yb + xa]) * tx;
+    return top + (bot - top) * ty;
+  };
+  const [dark, light] = NOISE_TINT[theme] ?? NOISE_TINT.grass;
+  const W = Math.ceil(w / 2);
+  const H = Math.ceil(h / 2);
+  const cv = document.createElement("canvas");
+  cv.width = W;
+  cv.height = H;
+  const ctx = cv.getContext("2d")!;
+  const img = ctx.createImageData(W, H);
+  const d = img.data;
+  for (let y = 0; y < H; y++) {
+    const v = (((y * 2 + oy) % P) + P) % P;
+    for (let x = 0; x < W; x++) {
+      const u = (((x * 2 + ox) % P) + P) % P;
+      const n = 0.55 * octave(g4, 4, u, v) + 0.3 * octave(g8, 8, u, v) + 0.15 * octave(g32, 32, u, v);
+      const gr = grit[((v >> 1) & 255) * 256 + ((u >> 1) & 255)];
+      let aDark = Math.max(0, Math.min(0.32, (n - 0.52) * 1.3));
+      let aLight = Math.max(0, Math.min(0.22, (0.42 - n) * 1.0));
+      if (gr < 0.07) aDark += 0.16;
+      else if (gr > 0.96) aLight += 0.18;
+      const i = (y * W + x) * 4;
+      const c = aDark >= aLight ? dark : light;
+      d[i] = c[0];
+      d[i + 1] = c[1];
+      d[i + 2] = c[2];
+      d[i + 3] = Math.round(Math.max(aDark, aLight) * 255);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return cv;
+}
 
 /** 一棵樹（沙漠是枯灌木）：影子、樹冠、亮面 */
 function drawTree(c: CanvasRenderingContext2D, x: number, y: number, r: number, look: GroundLook) {

@@ -395,7 +395,7 @@ function hq(ctx: Ctx, f: Faction) {
     return p;
   };
   sandbags(ctx, 0, 0, 52, 0, Math.PI * 2);
-  fillStroke(ctx, hex(44), "#a5a090", 3);
+  stoneWall(ctx, hex(44), "#b3ab96", 3);
   ctx.save();
   ctx.lineWidth = 6;
   ctx.strokeStyle = f.css;
@@ -422,17 +422,40 @@ function hq(ctx: Ctx, f: Faction) {
   fillStroke(ctx, flag, f.css, 1.2);
 }
 
-/** 星形稜堡：faction = null 是無主（灰色、白旗） */
-/** 星形稜堡：faction = null 是無主（灰色、白旗）；spec 是改建後的樣式 */
+/** 石牆：先畫落在地上的影子，再畫牆、上亮下暗的光影、內緣亮線、深色外框 */
+function stoneWall(ctx: Ctx, path: Path2D, base: string, lw: number) {
+  ctx.save();
+  ctx.shadowColor = "rgba(42,29,12,0.55)";
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 5;
+  ctx.fillStyle = base;
+  ctx.fill(path);
+  ctx.restore();
+  const g = ctx.createLinearGradient(0, -40, 0, 40);
+  g.addColorStop(0, "rgba(255,255,255,0.3)");
+  g.addColorStop(0.55, "rgba(255,255,255,0)");
+  g.addColorStop(1, "rgba(0,0,0,0.3)");
+  ctx.fillStyle = g;
+  ctx.fill(path);
+  ctx.save();
+  ctx.clip(path);
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.lineWidth = 3;
+  ctx.translate(0, 1.5);
+  ctx.stroke(path);
+  ctx.restore();
+  ctx.lineWidth = lw;
+  ctx.strokeStyle = "#2c2a22";
+  ctx.lineJoin = "round";
+  ctx.stroke(path);
+}
+
+/** 星形稜堡（十六角，四個稜角）：faction = null 是無主（灰色、白旗）；spec 是改建後的樣式 */
 function fort(ctx: Ctx, f: Faction | null, spec = "") {
-  ctx.translate(40, 40);
+  ctx.translate(46, 46);
   const star = new Path2D();
-  for (let i = 0; i < 8; i++) {
-    const a = -Math.PI / 2 + (i * Math.PI) / 4;
-    const r = i % 2 === 0 ? 34 : 22;
-    if (i === 0) star.moveTo(Math.cos(a) * r, Math.sin(a) * r);
-    else star.lineTo(Math.cos(a) * r, Math.sin(a) * r);
-  }
+  const B = [[0, -54], [18, -32], [32, -32], [32, -18], [54, 0], [32, 18], [32, 32], [18, 32], [0, 54], [-18, 32], [-32, 32], [-32, 18], [-54, 0], [-32, -18], [-32, -32], [-18, -32]];
+  B.forEach(([x, y], i) => (i ? star.lineTo(x * 0.63, y * 0.63) : star.moveTo(x * 0.63, y * 0.63)));
   star.closePath();
   // 改建後的外觀：牆的顏色和外圍裝飾不同
   const wall: Record<string, string> = { battery: "#8f8a7c", barracks: "#a79a7a", depot: "#a8946a", flak: "#8d9196", hospital: "#d9d4c4" };
@@ -447,12 +470,7 @@ function fort(ctx: Ctx, f: Faction | null, spec = "") {
       ctx.restore();
     }
   }
-  fillStroke(ctx, star, wall[spec] ?? "#a5a090", 2.5);
-  const g = ctx.createRadialGradient(-8, -8, 2, 0, 0, 34);
-  g.addColorStop(0, "rgba(255,255,255,0.25)");
-  g.addColorStop(1, "rgba(0,0,0,0.22)");
-  ctx.fillStyle = g;
-  ctx.fill(star);
+  stoneWall(ctx, star, wall[spec] ?? "#b3ab96", 2.5);
   if (spec === "depot") {
     // 補給站：黃黑警示線＋木箱
     ctx.save();
@@ -863,8 +881,8 @@ export function makeTextures(scene: Phaser.Scene) {
     canvasTex(scene, `howitzer${i}`, 60, 36, (c) => howitzer(c, f));
     canvasTex(scene, `hq${i}`, 120, 120, (c) => hq(c, f));
     canvasTex(scene, `bunker${i}`, 48, 48, (c) => bunker(c, f));
-    canvasTex(scene, `fort${i}`, 80, 80, (c) => fort(c, f));
-    for (const spec of ["battery", "barracks", "depot", "flak", "hospital"]) canvasTex(scene, `fort${i}_${spec}`, 80, 80, (c) => fort(c, f, spec));
+    canvasTex(scene, `fort${i}`, 92, 92, (c) => fort(c, f));
+    for (const spec of ["battery", "barracks", "depot", "flak", "hospital"]) canvasTex(scene, `fort${i}_${spec}`, 92, 92, (c) => fort(c, f, spec));
     canvasTex(scene, `sniper${i}`, 24, 18, (c) => sniperMan(c, f));
     canvasTex(scene, `flame${i}`, 20, 18, (c) => flameMan(c, f));
     canvasTex(scene, `car${i}`, 44, 26, (c) => armoredCar(c, f));
@@ -874,7 +892,20 @@ export function makeTextures(scene: Phaser.Scene) {
     canvasTex(scene, `bomber${i}`, 116, 108, (c) => drawPlane(c, BOMBER, f, 1));
     canvasTex(scene, `transport${i}`, 100, 96, (c) => drawPlane(c, TRANSPORT, f, 1));
   });
-  canvasTex(scene, "fortNeutral", 80, 80, (c) => fort(c, null));
+  canvasTex(scene, "fortNeutral", 92, 92, (c) => fort(c, null));
+  // 領土光暈：陣營色往外淡出（直接畫好顏色，Canvas 模式不支援上色也一樣）。
+  // 黑鷹旅用灰色（純黑會把地面弄髒）
+  ["255,255,255", "79,134,232", "242,107,33", "107,107,107", "255,255,255"].forEach((rgb, j) => {
+    const i = j - 1; // glow = 白色（WebGL 用上色）；glow0–3 = 已經上好顏色（Canvas 模式用）
+    canvasTex(scene, i < 0 ? "glow" : `glow${i}`, 128, 128, (c) => {
+      const g = c.createRadialGradient(64, 64, 0, 64, 64, 64);
+      g.addColorStop(0, `rgba(${rgb},1)`);
+      g.addColorStop(0.45, `rgba(${rgb},0.7)`);
+      g.addColorStop(1, `rgba(${rgb},0)`);
+      c.fillStyle = g;
+      c.fillRect(0, 0, 128, 128);
+    });
+  });
   canvasTex(scene, "healplus", 18, 18, (c) => {
     const p = new Path2D();
     p.rect(6.5, 2, 5, 14);
