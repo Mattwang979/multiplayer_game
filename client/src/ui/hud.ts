@@ -12,6 +12,8 @@ import {
   FORT_SPECS,
   FORT_SPEC_DEFS,
   GARRISON_CAP,
+  GARRISON_FIRE_BONUS,
+  GARRISON_FIRE_MAX,
   UNIT_GROUPS,
   MAX_UPGRADE_LEVEL,
   POP_CAP,
@@ -33,6 +35,7 @@ import { enterFullscreen, exitFullscreen, isFullscreen, isMobile, isStandalone }
 import { initAudio, isMusicOn, isMuted, play, setMusicIntensity, stopMusic, toggleMusic, toggleMute } from "../game/sound";
 import { bus, session } from "../session";
 import { mountHistory } from "./chart";
+import { emblem, unitIcon } from "./icons";
 import type { PlayerState, UnitState } from "../types";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -44,6 +47,10 @@ const ICON_MUSIC = svg('<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2
 const ICON_MUSIC_OFF = svg('<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/><path d="M3 3l18 18"/>');
 const ICON_FS = svg('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>');
 const ICON_FS_EXIT = svg('<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>');
+const ICON_MENU = svg('<path d="M4 7h16M4 12h16M4 17h16"/>');
+const ICON_X = svg('<path d="M6 6l12 12M18 6L6 18"/>');
+const ICON_UP = svg('<path d="M12 19V5M6 11l6-6 6 6"/>');
+const ICON_DRAG = svg('<path d="M9 11V5a2 2 0 0 1 4 0v6M13 10a2 2 0 0 1 4 0v3M9 11a2 2 0 0 0-4 0v3c0 4 3 7 7 7h1a5 5 0 0 0 5-5v-3"/>');
 const setText = (el: Element, t: string) => {
   if (el.textContent !== t) el.textContent = t;
 };
@@ -57,6 +64,12 @@ export class Hud {
   private buildMenu = $("build-menu");
   private groupBar = $("group-bar");
   private tab = 0; // 兵種分頁
+  private drawerOpen = false; // 下方據點抽屜（點堡壘才出現）
+  private padNode = -1; // 抽屜剛打開時要捲到抽屜上方的據點
+  private lastPad = -1;
+  private specOpen = false;
+  private suppressClick = false; // 長按買 5 之後，放開的那一下不要再買 1
+  private pressTimer = 0;
   private history: BattleHistory | null = null; // 結算的勢力變化圖資料
   private targetHint = $("target-hint");
   private result = $("result");
@@ -74,6 +87,14 @@ export class Hud {
       bus.on("toast", (t: string) => this.showToast(t)),
       bus.on("banner", (b: { kind: string; text: string; sub?: string; color?: string }) => this.showBanner(b.kind, b.text, b.sub, b.color)),
       bus.on("nodeSelected", () => play("click", 0.4)),
+      bus.on("fortTap", (node: number) => this.openDrawer(node)),
+      bus.on("mapTap", () => {
+        this.closeDrawer();
+        this.closePops();
+      }),
+      bus.on("unitsSelected", (ids: string[]) => {
+        if (ids.length) this.closeDrawer();
+      }),
       bus.on("leader", (m: { id: string; faction: number }) => this.onLeader(m)),
       bus.on("airMode", () => this.refreshAir()),
       bus.on("buildMenu", (m: { lane: number; node: number; slot: number; x: number; y: number } | null) => this.openBuildMenu(m)),
@@ -113,7 +134,11 @@ export class Hud {
       }),
     );
     window.addEventListener("keydown", this.onKey);
+    document.addEventListener("pointerdown", this.onOutside, true);
+    this.top.addEventListener("click", this.onTopClick);
     this.bottom.addEventListener("click", this.onClick);
+    this.bottom.addEventListener("pointerdown", this.onPress);
+    for (const ev of ["pointerup", "pointercancel", "pointerleave"]) this.bottom.addEventListener(ev, this.onRelease);
     this.bottom.addEventListener("contextmenu", this.onContext);
     this.buildMenu.addEventListener("click", this.onBuildClick);
     this.groupBar.addEventListener("click", this.onGroupClick);
@@ -127,6 +152,7 @@ export class Hud {
   destroy() {
     this.offs.forEach((f) => f());
     window.removeEventListener("keydown", this.onKey);
+    document.removeEventListener("pointerdown", this.onOutside, true);
   }
 
   resetForBattle() {
@@ -144,6 +170,8 @@ export class Hud {
     session.clearPicks();
     this.groupBar.classList.add("hidden");
     this.history = null;
+    this.closeDrawer();
+    this.closePops();
   }
 
   // ================================================================ 每一格更新
@@ -209,28 +237,27 @@ export class Hud {
         const prev = this.lastHq.get(p.id) ?? ratio;
         this.lastHq.set(p.id, ratio);
         const hit = ratio < prev - 0.002;
-        const status = !p.alive ? "已出局" : !p.connected ? "斷線・電腦代管" : p.isBot ? "電腦" : "";
-        return `<div class="pcard${p.id === me.id ? " me" : ""}${p.alive ? "" : " out"}">
-          <p class="pc-name" style="color:${f.light}"><span class="pc-f">${f.name}・</span>${esc(p.name)}${p.id === me.id ? "（你）" : ""}${status ? ` <span class="pc-status">${status}</span>` : ""}</p>
-          <div class="pc-row"><div class="bar${hit ? " hit" : ""}"><i style="width:${(ratio * 100).toFixed(1)}%;background:${f.bar}"></i></div>${p.alive ? `<span class="pc-forts" title="擁有的堡壘數">${p.id === s.leaderId ? '<em class="pc-bounty" title="堡壘最多：被懸賞中">懸賞</em>' : ""}堡 ${p.forts}</span>` : ""}</div>
+        const status = !p.alive ? "出局" : !p.connected ? "斷線" : "";
+        return `<div class="pcard${p.id === me.id ? " me" : ""}${p.alive ? "" : " out"}" title="${f.name}・${esc(p.name)}：大本營血量、擁有的堡壘數">
+          <div class="pc-head">${emblem(f.emblem, f.css, f.mark, 14)}<span class="pc-name">${esc(p.name)}${p.id === me.id ? "（你）" : ""}</span>${p.alive && p.id === s.leaderId ? '<em class="pc-bounty">懸賞</em>' : ""}${status ? `<em class="pc-status">${status}</em>` : ""}<b class="pc-forts">${p.alive ? p.forts : ""}</b></div>
+          <div class="bar${hit ? " hit" : ""}"><i style="width:${(ratio * 100).toFixed(1)}%;background:${f.bar}"></i></div>
         </div>`;
       })
       .join("");
     if (!this.top.querySelector(".pcards")) {
       this.top.innerHTML = `<div class="pcards"></div>
-        <div class="timer"><strong></strong><span>剩餘時間</span><em class="event-chip hidden"></em></div>
-        <div class="funds"><strong></strong><span class="fsub"></span>
-          <span class="top-btns"><button class="btn small icon" data-act="music" aria-label="關配樂"></button><button class="btn small icon" data-act="mute" aria-label="靜音"></button><button class="btn small icon" data-act="fs" aria-label="全螢幕"></button></span></div>`;
-      this.top.querySelector<HTMLButtonElement>('[data-act="mute"]')!.onclick = () => toggleMute();
-      this.top.querySelector<HTMLButtonElement>('[data-act="music"]')!.onclick = () => toggleMusic();
-      this.top.querySelector<HTMLButtonElement>('[data-act="fs"]')!.onclick = async () => {
-        if (isFullscreen()) {
-          await exitFullscreen();
-          return;
-        }
-        const tip = await enterFullscreen();
-        if (tip) this.showToast(tip, 5000);
-      };
+        <div class="hud-right">
+          <div class="timer"><strong></strong><span>剩餘</span></div>
+          <div class="funds"><strong></strong><span class="fsub"></span></div>
+          <button class="menu-btn" data-act="menu" aria-label="選單" aria-expanded="false" aria-haspopup="menu">${ICON_MENU}</button>
+          <div class="menu-pop hidden" role="menu">
+            <button data-act="music" role="menuitem"></button>
+            <button data-act="mute" role="menuitem"></button>
+            <button data-act="fs" role="menuitem"></button>
+            <button data-act="quit" role="menuitem" class="danger">離開對局</button>
+          </div>
+          <em class="event-chip hidden"></em>
+        </div>`;
     }
     // 進行中的隨機事件
     const chip = this.top.querySelector<HTMLElement>(".event-chip")!;
@@ -253,89 +280,147 @@ export class Hud {
     setText(timer.querySelector("strong")!, `${mm}:${ss}`);
     setText(this.top.querySelector(".funds strong")!, `$${me.funds.toLocaleString()}`);
     const net = me.income - me.upkeep;
-    setText(
-      this.top.querySelector(".fsub")!,
-      isMobile()
-        ? `${net >= 0 ? "+" : ""}${net.toFixed(1)}/秒`
-        : `收入 +${me.income.toFixed(1)}・養兵 -${me.upkeep.toFixed(1)}/秒・兵力 ${me.pop}/${POP_CAP}`,
-    );
-    this.top.querySelector(".fsub")!.classList.toggle("warn", me.upkeep >= me.income * 0.5 && me.upkeep > 0);
-    const mute = this.top.querySelector<HTMLElement>('[data-act="mute"]')!;
-    const muteKey = isMuted() ? "off" : "on";
-    if (mute.dataset.state !== muteKey) {
-      mute.dataset.state = muteKey;
-      mute.innerHTML = muteKey === "on" ? ICON_SOUND : ICON_MUTED;
-      mute.setAttribute("aria-label", muteKey === "on" ? "靜音" : "開聲音");
-    }
-    const music = this.top.querySelector<HTMLElement>('[data-act="music"]')!;
-    const musicKey = isMusicOn() ? "on" : "off";
-    if (music.dataset.state !== musicKey) {
-      music.dataset.state = musicKey;
-      music.innerHTML = musicKey === "on" ? ICON_MUSIC : ICON_MUSIC_OFF;
-      music.setAttribute("aria-label", musicKey === "on" ? "關配樂" : "開配樂");
-    }
-    const fs = this.top.querySelector<HTMLElement>('[data-act="fs"]')!;
+    const fsub = this.top.querySelector<HTMLElement>(".fsub")!;
+    setText(fsub, `${net >= 0 ? "+" : ""}${net.toFixed(1)}/秒・兵力 ${me.pop}/${POP_CAP}`);
+    fsub.title = `收入 +${me.income.toFixed(1)}/秒，養兵 -${me.upkeep.toFixed(1)}/秒`;
+    fsub.classList.toggle("warn", me.upkeep >= me.income * 0.5 && me.upkeep > 0);
+    // 選單裡的開關
+    const menuItem = (act: string, html: string) => {
+      const el = this.top.querySelector<HTMLElement>(`[data-act="${act}"]`)!;
+      if (el.dataset.html !== html) {
+        el.dataset.html = html;
+        el.innerHTML = html;
+      }
+      return el;
+    };
+    menuItem("music", `${isMusicOn() ? ICON_MUSIC : ICON_MUSIC_OFF}配樂：${isMusicOn() ? "開" : "關"}<kbd>N</kbd>`);
+    menuItem("mute", `${isMuted() ? ICON_MUTED : ICON_SOUND}音效：${isMuted() ? "關" : "開"}<kbd>M</kbd>`);
+    const fs = menuItem("fs", document.fullscreenElement ? `${ICON_FS_EXIT}離開全螢幕` : `${ICON_FS}全螢幕`);
     fs.classList.toggle("hidden", isStandalone());
-    const fsKey = document.fullscreenElement ? "exit" : "enter";
-    if (fs.dataset.state !== fsKey) {
-      fs.dataset.state = fsKey;
-      fs.innerHTML = fsKey === "enter" ? ICON_FS : ICON_FS_EXIT;
-      fs.setAttribute("aria-label", fsKey === "enter" ? "全螢幕" : "離開全螢幕");
+  }
+
+  private onTopClick = async (e: MouseEvent) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>("button[data-act]");
+    if (!el) return;
+    initAudio();
+    const act = el.dataset.act;
+    if (act === "menu") {
+      const pop = this.top.querySelector<HTMLElement>(".menu-pop")!;
+      const open = pop.classList.contains("hidden");
+      this.closePops();
+      pop.classList.toggle("hidden", !open);
+      el.setAttribute("aria-expanded", String(open));
+      play("click", 0.5);
+    } else if (act === "music") toggleMusic();
+    else if (act === "mute") toggleMute();
+    else if (act === "fs") {
+      if (isFullscreen()) await exitFullscreen();
+      else {
+        const tip = await enterFullscreen();
+        if (tip) this.showToast(tip, 5000);
+      }
+    } else if (act === "quit") {
+      // 按兩下才離開，避免誤觸
+      if (el.dataset.confirm) this.onLeave();
+      else {
+        el.dataset.confirm = "1";
+        el.textContent = "確定離開？電腦會接手";
+      }
     }
+  };
+
+  /** 點到選單、升級、改建以外的地方就收起來 */
+  private onOutside = (e: PointerEvent) => {
+    const t = e.target as HTMLElement;
+    if (t.closest?.(".menu-pop, .menu-btn, .ups-pop, [data-act='ups'], .spec-pop, [data-act='spec']")) return;
+    this.closePops();
+  };
+
+  private closePops() {
+    const pop = this.top.querySelector<HTMLElement>(".menu-pop");
+    if (pop && !pop.classList.contains("hidden")) {
+      pop.classList.add("hidden");
+      this.top.querySelector('[data-act="menu"]')?.setAttribute("aria-expanded", "false");
+      const quit = pop.querySelector<HTMLElement>('[data-act="quit"]');
+      if (quit) {
+        delete quit.dataset.confirm;
+        quit.textContent = "離開對局";
+      }
+    }
+    this.bottom.querySelector(".hud-actions")?.classList.remove("ups-open");
+    this.bottom.querySelector('[data-act="ups"]')?.setAttribute("aria-expanded", "false");
+    this.specOpen = false;
+    this.bottom.querySelector(".spec-pop")?.classList.add("hidden");
+  }
+
+  /** 打開下方的據點抽屜（點自己的堡壘、或 Tab 切換據點） */
+  private openDrawer(node: number) {
+    if (node < 0 || !session.ownsNode(node)) return;
+    this.drawerOpen = true;
+    this.padNode = node;
+    this.lastPad = -1;
+    this.specOpen = false;
+    this.bottom.querySelector(".spec-pop")?.classList.add("hidden");
+  }
+
+  private closeDrawer() {
+    if (!this.drawerOpen) return;
+    this.drawerOpen = false;
+    this.specOpen = false;
+    this.bottom.querySelector(".spec-pop")?.classList.add("hidden");
   }
 
   private buildBottom() {
     this.builtFor = this.mapId;
-    const units = UNIT_TYPES.map((t) => {
+    const hk = !isMobile();
+    const cards = UNIT_TYPES.map((t) => {
       const d = UNITS[t];
       const gi = UNIT_GROUPS.findIndex((g) => g.types.includes(t));
-      return `<div class="ucard" data-type="${t}" data-group="${gi}" title="${d.name}：${d.short}（人口 ${d.pop}）">
-        <button class="ubuy" data-buy="${t}"><b>${d.hotkey}</b><span class="cn">${d.name}</span><span class="cc">$${d.cost}</span></button>
-        <button class="upick" data-pick="${t}" aria-label="選要派出幾支${d.name}"><span class="pk-n">0</span><span class="pk-of">/0</span></button>
-      </div>`;
+      return `<button class="ucard" data-buy="${t}" data-group="${gi}" title="${d.name}：${d.short}（人口 ${d.pop}）">${hk ? `<b class="hk">${d.hotkey}</b>` : ""}<span class="uc-have"></span>${unitIcon(t, 26)}<span class="cn">${d.name}</span><span class="cc">$${d.cost}</span></button>`;
     }).join("");
     const air = AIR_KINDS.map((k) => {
       const d = AIRCRAFT[k];
-      return `<button class="card air" data-air="${k}" title="${d.short}"><b>${d.hotkey}</b><span class="cn">${d.name === "空降" ? "空降部隊" : d.name}</span><span class="cc">$${d.cost}</span><i class="cd"></i></button>`;
+      return `<button class="act air a-${k}" data-air="${k}" title="${d.short}${hk ? `（${d.hotkey}）` : ""}"><span class="act-in">${unitIcon(k, k === "bomber" ? 24 : 20)}<span class="an">${d.name}</span><span class="ac">$${d.cost}</span></span></button>`;
     }).join("");
     const ups = UPGRADE_KINDS.map((k) => {
       const d = UPGRADES[k];
-      return `<button class="card up" data-up="${k}" title="${d.short}"><b>${d.hotkey}</b><span class="cn" data-up-name="${k}">${d.name}</span><span class="cc" data-up-cost="${k}"></span></button>`;
+      return `<button class="up-card" data-up="${k}" title="${d.short}"><b data-up-name="${k}"></b><small>${d.short}</small><em data-up-cost="${k}"></em>${hk ? `<i class="hk">${d.hotkey}</i>` : ""}</button>`;
     }).join("");
-    // 桌機：一整排在下方；手機橫向：左欄（據點、空軍、升級）+ 右欄（買兵、選數量），由 CSS 切換
     this.bottom.innerHTML = `
-      <div class="hud-col left">
-        <div class="hud-group g-fort"><span class="hud-label">據點</span>
-          <div class="fort-box">
-            <div class="fort-head"><p class="fort-name" data-fort-name></p><p class="fort-sub" data-fort-sub></p></div>
-            <div class="fort-ctl">
-              <button class="fort-toggle" data-act="enter" aria-pressed="true"></button>
-              <button data-act="pick-all">全選</button>
-              <button data-act="pick-none">清除</button>
-              <button class="fort-spec" data-act="spec">改建</button>
-            </div>
-            <div class="spec-pop"></div>
-            <p class="fort-tip">${isMobile() ? "從據點拖到目的地派兵" : "從據點拖到目的地派兵・沒選數量＝全部派出"}</p>
-          </div>
-        </div>
-        <div class="hud-group g-air"><span class="hud-label">空軍</span>${air}</div>
-        <div class="hud-group g-ups"><span class="hud-label">升級</span>
-          <button class="card ups-toggle" data-act="ups"><span class="cn">升級</span><span class="cc" data-ups-lv></span></button>
-          <div class="ups-pop">${ups}</div>
-        </div>
+      <div class="hud-actions">${air}
+        <button class="act ups" data-act="ups" aria-expanded="false"><span class="act-in">${ICON_UP}<span class="an">升級</span><span class="ac" data-ups-n></span></span></button>
+        <div class="ups-pop"><p class="pop-title">升級<span>全軍生效</span></p>${ups}</div>
       </div>
-      <div class="hud-col right">
-        <div class="hud-group g-units"><span class="hud-label">買兵<br>派出數量</span>
-          <div class="utabs">${UNIT_GROUPS.map((g, i) => `<button data-tab="${i}">${g.name}<i data-tab-n="${i}"></i></button>`).join("")}</div>
-          <div class="ucards">${units}</div>
-        </div>
-      </div>`;
+      <div class="drawer hidden" role="region" aria-label="據點">
+        <section class="dr-fort">
+          <div class="dr-head"><span data-fort-emb></span><b class="fort-name" data-fort-name></b><span class="fort-kind" data-fort-kind></span></div>
+          <div class="dr-meter"><span>駐軍</span><b data-fort-used></b></div>
+          <div class="gbar"><i data-fort-bar></i></div>
+          <p class="fort-sub" data-fort-sub></p>
+          <div class="dr-ctl">
+            <button class="fort-spec" data-act="spec">改建</button>
+            <button class="fort-toggle" data-act="enter" aria-pressed="true"></button>
+          </div>
+        </section>
+        <section class="dr-buy">
+          <div class="dr-tabs"><span class="dr-label">買兵</span>${UNIT_GROUPS.map((g, i) => `<button data-tab="${i}">${g.name}</button>`).join("")}<span class="dr-hint">${hk ? "數字鍵也能買・Shift 點一次買 5" : "點一下買 1・長按買 5"}</span></div>
+          <div class="ucards">${cards}</div>
+        </section>
+        <section class="dr-send">
+          <div class="dr-send-head"><span class="dr-label" data-send-label></span><button data-act="pick-all">全選</button><button data-act="pick-none">清除</button></div>
+          <div class="pick-chips" data-chips></div>
+          <p class="drag-hint">${ICON_DRAG}<span>從堡壘<b>拖曳</b>到目的地派兵</span></p>
+        </section>
+        <button class="dr-close" data-act="close-drawer" aria-label="收起據點面板">${ICON_X}</button>
+      </div>
+      <div class="spec-pop hidden"></div>`;
   }
 
   /** 選到的據點丟了就換回大本營；選到的部隊死了或進駐了就移出選取 */
   private ensureSelection(me: PlayerState) {
     const s = session.state!;
     if (!session.ownsNode(session.selectedNode)) {
+      this.closeDrawer();
       let next = session.ownsNode(me.hq) ? me.hq : -1;
       if (next < 0) for (let i = 0; i < s.nodes.length; i++) if (session.ownsNode(i)) { next = i; break; }
       session.selectedNode = next;
@@ -356,9 +441,51 @@ export class Hud {
   private renderBottom(me: PlayerState) {
     const s = session.state!;
     const dead = !me.alive || s.phase !== "playing";
-    this.bottom.style.opacity = dead ? "0.5" : "1";
+    this.bottom.classList.toggle("dead", dead);
+    if (dead) this.drawerOpen = false;
+    // 右下：空軍（外圈是冷卻）、升級
+    AIR_KINDS.forEach((k, i) => {
+      const el = this.bottom.querySelector<HTMLElement>(`[data-air="${k}"]`);
+      if (!el) return;
+      const d = AIRCRAFT[k];
+      const left = (me.airReady[i] ?? 0) - s.time;
+      const cooling = left > 0.05;
+      el.style.setProperty("--p", cooling ? Math.max(0, Math.min(1, 1 - left / d.cooldown)).toFixed(3) : "1");
+      el.classList.toggle("cooling", cooling);
+      el.classList.toggle("poor", me.funds < d.cost);
+      el.classList.toggle("ready", !cooling && me.funds >= d.cost);
+      el.classList.toggle("armed", session.airMode === k);
+      setText(el.querySelector(".ac")!, cooling ? `${left >= 10 ? Math.ceil(left) : left.toFixed(1)}s` : `$${d.cost}`);
+    });
+    let canUp = 0;
+    UPGRADE_KINDS.forEach((k) => {
+      const lvl = me[k];
+      const max = lvl >= MAX_UPGRADE_LEVEL;
+      const price = max ? 0 : UPGRADES[k].costs[lvl];
+      if (!max && me.funds >= price) canUp++;
+      setText(this.bottom.querySelector(`[data-up-name="${k}"]`)!, `${UPGRADES[k].name} Lv${lvl}`);
+      setText(this.bottom.querySelector(`[data-up-cost="${k}"]`)!, max ? "已滿級" : `$${price}`);
+      const el = this.bottom.querySelector<HTMLButtonElement>(`[data-up="${k}"]`)!;
+      el.classList.toggle("poor", !max && me.funds < price);
+      el.disabled = max;
+    });
+    setText(this.bottom.querySelector("[data-ups-n]")!, canUp ? `可升 ${canUp}` : `Lv ${me.firepower + me.armor + me.logistics}`);
+    this.bottom.querySelector('[data-act="ups"]')!.classList.toggle("hot", canUp > 0);
+
+    // 下方抽屜：點堡壘才出現
+    const drawer = this.bottom.querySelector<HTMLElement>(".drawer")!;
+    drawer.classList.toggle("hidden", !this.drawerOpen);
+    document.body.classList.toggle("drawer-open", this.drawerOpen);
+    if (!this.drawerOpen) {
+      if (this.lastPad !== 0) {
+        this.lastPad = 0;
+        bus.emit("viewPad", { bottom: 0 });
+      }
+      return;
+    }
     const node = session.selectedNode;
     const n = node >= 0 ? s.nodes[node] : undefined;
+    const nd = node >= 0 ? this.map?.nodes[node] : undefined;
     const inside = node >= 0 ? session.garrison(node) : [];
     const have = UNIT_TYPES.map((t) => inside.filter((u) => u.type === t).length);
     // 選的數量不能超過駐軍
@@ -371,78 +498,69 @@ export class Hud {
     });
     const specOn = n && n.spec && s.time >= n.specAt ? (n.spec as FortSpec) : "";
     const cap = n ? (GARRISON_CAP[n.kind] ?? GARRISON_CAP.fort) + (specOn === "barracks" ? BARRACKS_CAP : specOn === "battery" ? BATTERY_CAP : 0) : 0;
-    const specName = specOn ? FORT_SPEC_DEFS[specOn as Exclude<FortSpec, "">].name : "";
-    setText(this.bottom.querySelector("[data-fort-name]")!, node >= 0 ? `${this.nodeName(node)}${specName ? `・${specName}` : ""}` : "沒有據點");
+    const f = FACTIONS[me.faction];
+    const emb = this.bottom.querySelector<HTMLElement>("[data-fort-emb]")!;
+    if (!emb.firstChild) emb.innerHTML = emblem(f.emblem, f.css, f.mark, 16);
+    setText(this.bottom.querySelector("[data-fort-name]")!, node >= 0 ? this.nodeName(node) : "沒有據點");
+    const kindName = specOn ? FORT_SPEC_DEFS[specOn as Exclude<FortSpec, "">].name : n?.kind === "hq" ? "" : nd?.big ? "大型堡壘" : "一般堡壘";
+    setText(this.bottom.querySelector("[data-fort-kind]")!, kindName);
+    setText(this.bottom.querySelector("[data-fort-used]")!, `${used} / ${cap}`);
+    this.bottom.querySelector<HTMLElement>("[data-fort-bar]")!.style.width = `${cap ? Math.min(100, (used / cap) * 100) : 0}%`;
     const grace = n ? Math.ceil(n.incomeAt - s.time) : 0;
     const converting = n && n.spec ? Math.ceil(n.specAt - s.time) : 0;
-    setText(
-      this.bottom.querySelector("[data-fort-sub]")!,
-      n ? `駐軍 ${used}/${cap}${converting > 0 ? `・改建 ${converting}s` : ""}${grace > 0 ? `・整頓 ${grace}s` : ""}` : "",
-    );
+    const fire = Math.round(Math.min(GARRISON_FIRE_MAX, used * GARRISON_FIRE_BONUS) * 100);
+    const sub = !n ? "" : converting > 0 ? `改建中，還要 ${converting} 秒` : grace > 0 ? `剛佔下，整頓 ${grace} 秒才有收入` : `火力 +${fire}%・血 ${Math.round(n.hp).toLocaleString()}/${Math.round(n.maxHp).toLocaleString()}`;
+    setText(this.bottom.querySelector("[data-fort-sub]")!, sub);
     const specBtn = this.bottom.querySelector<HTMLButtonElement>('[data-act="spec"]')!;
     specBtn.disabled = !n || n.kind === "hq" || converting > 0;
-    setText(specBtn, n?.kind === "hq" ? "大本營" : converting > 0 ? `改建中` : "改建");
-    if (specBtn.disabled) this.bottom.querySelector(".g-fort")?.classList.remove("spec-open");
-    // 兵種分頁
-    const groupCount = UNIT_GROUPS.map((g) => g.types.reduce((a, t) => a + have[UNIT_TYPES.indexOf(t)], 0));
-    this.bottom.querySelectorAll<HTMLElement>("[data-tab]").forEach((b) => {
-      const i = Number(b.dataset.tab);
-      b.classList.toggle("on", i === this.tab);
-      const badge = b.querySelector("i")!;
-      setText(badge as HTMLElement, groupCount[i] > 0 ? `${groupCount[i]}` : "");
-    });
+    setText(specBtn, n?.kind === "hq" ? "大本營不能改建" : converting > 0 ? "改建中" : "改建");
+    specBtn.setAttribute("aria-expanded", String(this.specOpen));
+    if (specBtn.disabled && this.specOpen) {
+      this.specOpen = false;
+      this.bottom.querySelector(".spec-pop")?.classList.add("hidden");
+    }
     const tog = this.bottom.querySelector<HTMLElement>('[data-act="enter"]')!;
     setText(tog, session.enter ? "佔領後進駐 ✓" : "佔領後進駐 ✗");
     tog.classList.toggle("on", session.enter);
     tog.setAttribute("aria-pressed", String(session.enter));
-
+    // 買兵：分頁＋卡片
+    this.bottom.querySelectorAll<HTMLElement>("[data-tab]").forEach((b) => {
+      const on = Number(b.dataset.tab) === this.tab;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", String(on));
+    });
     UNIT_TYPES.forEach((t, i) => {
-      const card = this.bottom.querySelector<HTMLElement>(`.ucard[data-type="${t}"]`);
+      const card = this.bottom.querySelector<HTMLElement>(`.ucard[data-buy="${t}"]`);
       if (!card) return;
       const d = UNITS[t];
-      const full = used + d.pop > cap || me.pop + d.pop > POP_CAP;
       const price = specOn === "barracks" ? Math.round(d.cost * BARRACKS_DISCOUNT) : d.cost;
       setText(card.querySelector(".cc")!, `$${price}`);
+      setText(card.querySelector(".uc-have")!, have[i] ? `×${have[i]}` : "");
       card.classList.toggle("off", Number(card.dataset.group) !== this.tab);
       card.classList.toggle("poor", me.funds < price);
-      card.classList.toggle("full", full);
-      card.classList.toggle("has", have[i] > 0);
-      card.classList.toggle("picked", session.picks[i] > 0);
-      setText(card.querySelector(".pk-n")!, `${session.picks[i]}`);
-      setText(card.querySelector(".pk-of")!, `/${have[i]}`);
+      card.classList.toggle("full", used + d.pop > cap || me.pop + d.pop > POP_CAP);
     });
-    AIR_KINDS.forEach((k, i) => {
-      const el = this.bottom.querySelector<HTMLElement>(`[data-air="${k}"]`);
-      if (!el) return;
-      const d = AIRCRAFT[k];
-      const left = (me.airReady[i] ?? 0) - s.time;
-      this.cardState(el, me.funds < d.cost, left, d.cooldown);
-      el.classList.toggle("armed", session.airMode === k);
-    });
-    const lv = this.bottom.querySelector<HTMLElement>("[data-ups-lv]");
-    if (lv) setText(lv, `Lv ${me.firepower}/${me.armor}/${me.logistics}`);
-    UPGRADE_KINDS.forEach((k) => {
-      const lvl = me[k];
-      const name = this.bottom.querySelector<HTMLElement>(`[data-up-name="${k}"]`);
-      const cost = this.bottom.querySelector<HTMLElement>(`[data-up-cost="${k}"]`);
-      const el = this.bottom.querySelector<HTMLElement>(`[data-up="${k}"]`);
-      const max = lvl >= MAX_UPGRADE_LEVEL;
-      const price = max ? 0 : UPGRADES[k].costs[lvl];
-      const nameText = `${UPGRADES[k].name} Lv${lvl}`;
-      const costText = max ? "已滿級" : `升級 $${price}`;
-      if (name && name.textContent !== nameText) name.textContent = nameText;
-      if (cost && cost.textContent !== costText) cost.textContent = costText;
-      el?.classList.toggle("poor", !max && me.funds < price);
-    });
-  }
-
-  private cardState(el: HTMLElement, poor: boolean, left: number, total: number) {
-    el.classList.toggle("poor", poor);
-    const cooling = left > 0.05;
-    el.classList.toggle("cooling", cooling);
-    if (cooling) el.dataset.cd = left >= 10 ? `${Math.ceil(left)}` : left.toFixed(1);
-    const bar = el.querySelector<HTMLElement>(".cd");
-    if (bar) bar.style.width = cooling ? `${Math.max(0, Math.min(1, 1 - left / total)) * 100}%` : "0%";
+    // 派出：駐軍有的兵種，點一下多選一支（到上限回到 0）
+    const total = have.reduce((a, b) => a + b, 0);
+    const picked = session.picks.reduce((a, b) => a + b, 0);
+    const sendLabel = this.bottom.querySelector<HTMLElement>("[data-send-label]")!;
+    setText(sendLabel, picked ? `派出 ${picked} 支` : total ? `派出：全部 ${total} 支` : "派出");
+    sendLabel.title = "沒選數量就是全部派出";
+    const chips = UNIT_TYPES.map((t, i) => (have[i] ? `<button class="pick-chip${session.picks[i] ? " on" : ""}" data-pick="${t}" aria-pressed="${session.picks[i] > 0}">${UNITS[t].name} ${session.picks[i]}/${have[i]}</button>` : "")).join("");
+    const box = this.bottom.querySelector<HTMLElement>("[data-chips]")!;
+    const html = chips || '<p class="pick-empty">堡壘裡還沒有兵，先在左邊買</p>';
+    if (box.dataset.html !== html) {
+      box.dataset.html = html;
+      box.innerHTML = html;
+    }
+    // 告訴地圖抽屜多高：被蓋住的據點捲上來
+    const h = drawer.offsetHeight;
+    if (h && h !== this.lastPad) {
+      this.lastPad = h;
+      document.documentElement.style.setProperty("--drawer-h", `${h}px`);
+      bus.emit("viewPad", { bottom: h, node: this.padNode });
+      this.padNode = -1;
+    }
   }
 
   /** 選到部隊時的指令列 */
@@ -505,9 +623,23 @@ export class Hud {
     initAudio();
     const el = (e.target as HTMLElement).closest<HTMLElement>("button");
     if (!el) return;
-    if (el.dataset.act === "ups") {
-      this.bottom.querySelector(".g-ups")?.classList.toggle("open");
+    if (this.suppressClick) {
+      this.suppressClick = false;
+      return;
+    }
+    const act = el.dataset.act;
+    if (act === "ups") {
+      const box = this.bottom.querySelector(".hud-actions")!;
+      const open = !box.classList.contains("ups-open");
+      this.closePops();
+      box.classList.toggle("ups-open", open);
+      el.setAttribute("aria-expanded", String(open));
       play("click");
+      return;
+    }
+    if (act === "close-drawer") {
+      this.closeDrawer();
+      play("click", 0.4);
       return;
     }
     if (el.dataset.tab !== undefined) {
@@ -515,27 +647,28 @@ export class Hud {
       play("click", 0.4);
       return;
     }
-    if (el.dataset.act === "spec") {
-      const box = this.bottom.querySelector(".g-fort")!;
-      const open = !box.classList.contains("spec-open");
-      box.classList.toggle("spec-open", open);
-      if (open) this.renderSpecPop();
+    if (act === "spec") {
+      this.specOpen = !this.specOpen;
+      const pop = this.bottom.querySelector<HTMLElement>(".spec-pop")!;
+      pop.classList.toggle("hidden", !this.specOpen);
+      if (this.specOpen) this.renderSpecPop();
       play("click", 0.5);
       return;
     }
     if (el.dataset.spec !== undefined) {
       session.send("convert", { node: session.selectedNode, spec: el.dataset.spec });
-      this.bottom.querySelector(".g-fort")?.classList.remove("spec-open");
+      this.specOpen = false;
+      this.bottom.querySelector(".spec-pop")?.classList.add("hidden");
       play("click", 0.7);
       return;
     }
     if (el.dataset.buy) this.buy(el.dataset.buy as UnitType, e.shiftKey ? 5 : 1, el);
     else if (el.dataset.pick) this.pick(el.dataset.pick as UnitType, 1, true);
-    else if (el.dataset.act === "pick-all") this.pickAll();
-    else if (el.dataset.act === "pick-none") {
+    else if (act === "pick-all") this.pickAll();
+    else if (act === "pick-none") {
       session.clearPicks();
       play("click", 0.5);
-    } else if (el.dataset.act === "enter") {
+    } else if (act === "enter") {
       session.enter = !session.enter;
       play("click", 0.5);
     } else if (el.dataset.air) this.armAir(el.dataset.air as AirKind);
@@ -543,10 +676,25 @@ export class Hud {
       session.send("upgrade", { kind: el.dataset.up });
       play("click");
     }
-    if (!el.dataset.up) this.bottom.querySelector(".g-ups")?.classList.remove("open");
   };
 
-  /** 改建選單：五種堡壘＋改回標準 */
+  /** 手機：在兵種卡上長按 = 一次買 5 支 */
+  private onPress = (e: PointerEvent) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>("button[data-buy]");
+    window.clearTimeout(this.pressTimer);
+    if (!el || e.pointerType === "mouse") return;
+    this.pressTimer = window.setTimeout(() => {
+      this.buy(el.dataset.buy as UnitType, 5, el);
+      this.suppressClick = true;
+      navigator.vibrate?.(15);
+    }, 450);
+  };
+
+  private onRelease = () => {
+    window.clearTimeout(this.pressTimer);
+  };
+
+  /** 改建選單：五種堡壘＋改回標準（在抽屜上方、右邊，不蓋住剛選的堡壘） */
   private renderSpecPop() {
     const s = session.state!;
     const n = s.nodes[session.selectedNode];
@@ -562,7 +710,7 @@ export class Hud {
       `<button class="spec-row${cur === "" ? " cur" : ""}" data-spec=""${cur === "" ? " disabled" : ""}><span class="sr-icon"></span><b>標準堡壘</b><em>免費</em><small>拆掉改建，回到一般堡壘</small></button>`,
     ].join("");
     const pop = this.bottom.querySelector<HTMLElement>(".spec-pop")!;
-    pop.innerHTML = `<p class="sp-title">改建 ${this.nodeName(session.selectedNode)}<span>要 10 秒，期間沒有特殊效果；被攻破會變回標準堡壘</span></p>${rows}`;
+    pop.innerHTML = `<p class="sp-title">改建 ${this.nodeName(session.selectedNode)}<span>施工 10 秒，期間被攻破就變回標準堡壘</span></p>${rows}`;
   }
 
   /** 右鍵點數量 = 減一 */
@@ -646,6 +794,7 @@ export class Hud {
     session.selectedNode = list[(idx + step + list.length) % list.length];
     session.clearPicks();
     bus.emit("nodeSelected", session.selectedNode);
+    this.openDrawer(session.selectedNode);
   }
 
   private onKey = (e: KeyboardEvent) => {
@@ -656,6 +805,8 @@ export class Hud {
     const me = session.me();
     if (!me || !this.map) return;
     if (k === "ESCAPE") {
+      this.closePops();
+      this.closeDrawer();
       session.airMode = null;
       bus.emit("airMode", null);
       bus.emit("cancelDrag");
@@ -696,6 +847,8 @@ export class Hud {
   };
 
   private armAir(kind: AirKind) {
+    this.closeDrawer();
+    this.closePops();
     session.airMode = session.airMode === kind ? null : kind;
     bus.emit("airMode", session.airMode);
     play("click");

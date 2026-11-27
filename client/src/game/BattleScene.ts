@@ -75,8 +75,11 @@ interface Drag {
   pid: number; // 哪一根手指（Phaser pointer id）
 }
 
-const MIN_ZOOM = 1;
+// 縮放倍數都是相對「剛好看到整張地圖」（1 = 全圖）
 const MAX_ZOOM = 3.2;
+// 畫面比地圖寬（手機橫向）時，地圖外面還要有地形，不然兩邊是黑的
+const MARGIN_X = 900;
+const MARGIN_Y = 500;
 
 interface UnitView {
   c: Phaser.GameObjects.Container;
@@ -136,6 +139,9 @@ export class BattleScene extends Phaser.Scene {
   private mapId = "";
   private fx!: Fx;
   private ground?: Phaser.GameObjects.Image;
+  private margin?: Phaser.GameObjects.TileSprite;
+  private edge?: Phaser.GameObjects.Graphics;
+  private padBottomCss = 0; // 下方抽屜蓋住的高度（CSS 像素）：鏡頭可以多往下捲這麼多
   private territory!: Phaser.GameObjects.Graphics;
   private bars!: Phaser.GameObjects.Graphics;
   private units = new Map<string, UnitView>();
@@ -206,7 +212,7 @@ export class BattleScene extends Phaser.Scene {
     });
     // 「全圖」按鈕：放大後才出現
     this.zoomBtn = document.getElementById("btn-zoom");
-    const resetZoom = () => this.setView(1, WORLD_W / 2, WORLD_H / 2, WORLD_W / 2, WORLD_H / 2);
+    const resetZoom = () => this.resetView();
     this.zoomBtn?.addEventListener("click", resetZoom);
     const cleanupZoom = () => this.zoomBtn?.removeEventListener("click", resetZoom);
     this.events.once("shutdown", cleanupZoom);
@@ -229,7 +235,17 @@ export class BattleScene extends Phaser.Scene {
       bus.on("paradrop", () => play("plane", 0.6)),
       bus.on("newBattle", () => (this.mapId = "")),
       bus.on("cancelDrag", () => this.endDrag()),
+      bus.on("viewPad", (m: { bottom: number; node?: number }) => this.setViewPad(m.bottom, m.node)),
     );
+    // 畫面大小改變（轉向、全螢幕、網址列收起）：還在全圖就重新對齊全圖，放大中就維持
+    const onResized = () => {
+      if (!this.map) return;
+      const cam = this.cameras.main;
+      if (cam.zoom <= this.fitZoom() * 1.02 || this.relZoom() < 1.02) this.resetView();
+      else this.clampCamera();
+    };
+    this.scale.on("resize", onResized);
+    this.offs.push(() => this.scale.off("resize", onResized));
     // 手指放開的事件有時候會遺失（例如按著的面板按鈕剛好被重畫、切到背景），
     // Phaser 就會以為那根手指一直按著，之後每次點地圖都被當成雙指縮放，整個點不動。
     // 每次有新的手指放下，用瀏覽器給的「目前所有手指」清掉已經不存在的觸控點。
@@ -299,8 +315,9 @@ export class BattleScene extends Phaser.Scene {
     if (oldKey && oldKey !== key && this.textures.exists(oldKey)) this.textures.remove(oldKey);
     if (!this.textures.exists(key)) this.paintGround(key);
     this.ground = this.add.image(0, 0, key).setOrigin(0).setDepth(DEPTH.ground);
-    this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H);
-    this.setView(1, WORLD_W / 2, WORLD_H / 2, WORLD_W / 2, WORLD_H / 2);
+    this.paintMargin();
+    this.cameras.main.removeBounds();
+    this.resetView();
 
     this.map.nodes.forEach((nd) => {
       const img = this.add.image(nd.x, nd.y, "fortNeutral").setDepth(DEPTH.structure);
@@ -331,6 +348,39 @@ export class BattleScene extends Phaser.Scene {
         .setVisible(false);
       this.nodes.push({ img, label, badge, key: "", shots: 0, airShots: 0, hp: 0, wx: nd.x, wy: nd.y, big: !!nd.big || hq });
     });
+  }
+
+  /** 地圖外圍：同色系、暗一點的地形，加一圈陰影當邊界 */
+  private paintMargin() {
+    const theme = this.map.def.theme;
+    const key = `margin-${theme}`;
+    if (!this.textures.exists(key)) {
+      const base = { grass: "#7f9650", river: "#7c9550", desert: "#b39d68", highland: "#8c9468" }[theme];
+      const tex = this.textures.createCanvas(key, 256, 256)!;
+      const c = tex.getContext();
+      c.fillStyle = base;
+      c.fillRect(0, 0, 256, 256);
+      const rand = mulberry(theme.length * 131);
+      for (let i = 0; i < 70; i++) {
+        c.fillStyle = rand() < 0.5 ? "rgba(0,0,0,0.06)" : "rgba(255,255,255,0.05)";
+        c.beginPath();
+        c.ellipse(rand() * 256, rand() * 256, 6 + rand() * 26, 4 + rand() * 14, rand() * 3, 0, Math.PI * 2);
+        c.fill();
+      }
+      tex.refresh();
+    }
+    this.margin?.destroy();
+    this.margin = this.add
+      .tileSprite(-MARGIN_X, -MARGIN_Y, WORLD_W + MARGIN_X * 2, WORLD_H + MARGIN_Y * 2, key)
+      .setOrigin(0)
+      .setDepth(DEPTH.ground - 2);
+    this.edge?.destroy();
+    const g = this.add.graphics().setDepth(DEPTH.ground - 1);
+    for (let i = 0; i < 6; i++) {
+      g.lineStyle(10, 0x0d0e0a, 0.13 - i * 0.018);
+      g.strokeRect(-5 - i * 10, -5 - i * 10, WORLD_W + 10 + i * 20, WORLD_H + 10 + i * 20);
+    }
+    this.edge = g;
   }
 
   /** 畫一次整張地面（地形、河流、湖、山、道路、橋、樹），之後當成一張圖用 */
@@ -1634,24 +1684,68 @@ export class BattleScene extends Phaser.Scene {
     };
   }
 
+  /** 剛好看到整張地圖的縮放倍數（扣掉下方抽屜） */
+  private fitZoom() {
+    const cam = this.cameras.main;
+    return Math.min(cam.width / WORLD_W, cam.height / WORLD_H);
+  }
+
+  /** 現在放大了幾倍（1 = 全圖） */
+  private relZoom() {
+    return this.cameras.main.zoom / this.fitZoom();
+  }
+
+  private resetView() {
+    const cam = this.cameras.main;
+    this.setView(this.fitZoom(), WORLD_W / 2, WORLD_H / 2, cam.width / 2, cam.height / 2);
+  }
+
+  /** 下方抽屜打開／關上：鏡頭可以多往下捲，被蓋住的據點捲到抽屜上方 */
+  private setViewPad(bottomCss: number, node?: number) {
+    this.padBottomCss = Math.max(0, bottomCss);
+    const cam = this.cameras.main;
+    if (node !== undefined && node >= 0 && this.map && this.padBottomCss > 0) {
+      const nd = this.map.nodes[node];
+      const rect = this.game.canvas.getBoundingClientRect();
+      const pxPerCss = this.scale.width / Math.max(1, rect.width);
+      const freeH = cam.height - this.padBottomCss * pxPerCss; // 抽屜上方還看得到的高度（畫布像素）
+      const sy = (nd.y - cam.scrollY - cam.height / 2) * cam.zoom + cam.height / 2;
+      if (sy > freeH - 60 * pxPerCss || sy < 40 * pxPerCss) {
+        const target = nd.y - (freeH * 0.5 - cam.height / 2) / cam.zoom - cam.height / 2;
+        this.tweens.add({ targets: cam, scrollY: target, duration: 220, ease: "Sine.easeOut", onUpdate: () => this.clampCamera() });
+        return;
+      }
+    }
+    this.clampCamera();
+  }
+
   /** 縮放到 zoom，並讓世界座標 (wx, wy) 留在畫布座標 (sx, sy) 底下 */
   private setView(zoom: number, wx: number, wy: number, sx: number, sy: number) {
     const cam = this.cameras.main;
-    const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+    const fit = this.fitZoom();
+    const z = Math.max(fit, Math.min(fit * MAX_ZOOM, zoom));
     cam.setZoom(z);
     cam.scrollX = wx - (sx - cam.width / 2) / z - cam.width / 2;
     cam.scrollY = wy - (sy - cam.height / 2) / z - cam.height / 2;
     this.clampCamera();
   }
 
+  /** 鏡頭不要跑出地圖：畫面比地圖大就置中，比地圖小就不能捲到地圖外；抽屜打開時可以多往下捲 */
   private clampCamera() {
     const cam = this.cameras.main;
     const z = cam.zoom;
-    const mx = Math.max(0, WORLD_W / 2 - WORLD_W / (2 * z));
-    const my = Math.max(0, WORLD_H / 2 - WORLD_H / (2 * z));
-    cam.scrollX = Math.max(-mx, Math.min(mx, cam.scrollX));
-    cam.scrollY = Math.max(-my, Math.min(my, cam.scrollY));
-    this.zoomBtn?.classList.toggle("hidden", z < 1.02);
+    const vw = cam.width / z;
+    const vh = cam.height / z;
+    const rect = this.game.canvas.getBoundingClientRect();
+    const pad = (this.padBottomCss * (this.scale.width / Math.max(1, rect.width))) / z; // 抽屜蓋住的世界高度
+    let cx = cam.scrollX + cam.width / 2;
+    let cy = cam.scrollY + cam.height / 2;
+    cx = vw >= WORLD_W ? WORLD_W / 2 : Math.max(vw / 2, Math.min(WORLD_W - vw / 2, cx));
+    if (vh - pad >= WORLD_H) cy = WORLD_H / 2 + pad / 2;
+    else cy = Math.max(Math.min(vh / 2, WORLD_H / 2 + pad / 2), Math.min(WORLD_H - vh / 2 + pad, cy));
+    cam.scrollX = cx - cam.width / 2;
+    cam.scrollY = cy - cam.height / 2;
+    this.zoomBtn?.classList.toggle("hidden", this.relZoom() < 1.02);
   }
 
   /** 1 個世界單位在螢幕上是幾個 CSS 像素 */
@@ -1939,7 +2033,10 @@ export class BattleScene extends Phaser.Scene {
       // 只是點一下
       if (d.kind === "dispatch") {
         if (session.selectedUnits.length) this.sendOrder(session.selectedUnits, [], { node: d.node });
-        else this.selectNode(d.node);
+        else {
+          this.selectNode(d.node);
+          bus.emit("fortTap", d.node);
+        }
       } else if (d.kind === "order" && d.node >= 0) {
         // 點站在據點上的兵：選據點（可以買兵），也選這些兵（下方出現指令列）
         this.selectNode(d.node);
@@ -1959,7 +2056,7 @@ export class BattleScene extends Phaser.Scene {
         const dest = this.destAt(w.x, w.y, true);
         if (dest) this.sendOrder(session.selectedUnits, [], dest);
         else this.clearUnitSelection();
-      }
+      } else if (d.kind === "pan") bus.emit("mapTap");
       return;
     }
     if (d.kind === "pan" || d.kind === "slot") return;

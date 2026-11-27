@@ -1,7 +1,7 @@
 // 前端進入點：首頁 → 大廳 → 對局，三個畫面依照房間狀態切換。
 import "./style.css";
 import Phaser from "phaser";
-import { KICK_CODE, WORLD_H, WORLD_W } from "@frontline/shared";
+import { KICK_CODE } from "@frontline/shared";
 import { canFullscreen, enterFullscreen, isMobile, updateDeviceClass } from "./device";
 import { BattleScene } from "./game/BattleScene";
 import { initAudio, play, startMusic, stopMusic } from "./game/sound";
@@ -33,14 +33,37 @@ function useCanvasRenderer() {
   }
 }
 
+// 畫布鋪滿整個畫面（地圖全螢幕），用裝置像素比畫，手機上才清楚；最多 2 倍，省電也省記憶體
+const dprNow = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+function canvasSize() {
+  const r = $("game-canvas").getBoundingClientRect();
+  return {
+    w: Math.round(r.width > 20 ? r.width : window.innerWidth),
+    h: Math.round(r.height > 20 ? r.height : window.innerHeight),
+  };
+}
+
+/** 畫面大小或像素比變了：畫布跟著改 */
+function fitCanvas() {
+  if (!game) return;
+  const { w, h } = canvasSize();
+  const dpr = dprNow();
+  const sm = game.scale;
+  if (Math.abs(sm.zoom - 1 / dpr) > 1e-3) sm.setZoom(1 / dpr);
+  if (Math.round(sm.width) !== Math.round(w * dpr) || Math.round(sm.height) !== Math.round(h * dpr)) sm.resize(w * dpr, h * dpr);
+  sm.refresh();
+}
+
 function createGame() {
+  const { w, h } = canvasSize();
+  const dpr = dprNow();
   game = new Phaser.Game({
     type: useCanvasRenderer() ? Phaser.CANVAS : Phaser.AUTO,
     parent: "game-canvas",
-    width: WORLD_W,
-    height: WORLD_H,
-    backgroundColor: "#7f9a4e",
-    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+    width: w * dpr,
+    height: h * dpr,
+    backgroundColor: "#5f6a3c",
+    scale: { mode: Phaser.Scale.NONE, zoom: 1 / dpr },
     scene: [BattleScene],
     disableContextMenu: true,
     banner: false,
@@ -92,7 +115,7 @@ function rebuildGame(reason: string) {
 }
 
 function refreshCanvasSoon() {
-  for (const ms of [0, 150, 600, 1500]) setTimeout(() => game?.scale.refresh(), ms);
+  for (const ms of [0, 150, 600, 1500]) setTimeout(() => fitCanvas(), ms);
 }
 
 function showRecover(text: string) {
@@ -107,7 +130,7 @@ function watchdog() {
   const now = performance.now();
   const parent = $("game-canvas").getBoundingClientRect();
   const rect = game.canvas?.getBoundingClientRect();
-  if (parent.width > 20 && parent.height > 20 && rect && (rect.width < 10 || rect.height < 10)) game.scale.refresh();
+  if (parent.width > 20 && parent.height > 20 && rect && (Math.abs(rect.width - parent.width) > 2 || Math.abs(rect.height - parent.height) > 2)) fitCanvas();
   const gl = (game.renderer as unknown as { gl?: WebGLRenderingContext }).gl;
   if (gl && typeof gl.isContextLost === "function" && gl.isContextLost()) {
     if (!lostAt) {
@@ -176,7 +199,7 @@ function onState() {
         }
       }
       // 視窗大小可能在大廳時改變過
-      game?.scale.refresh();
+      fitCanvas();
     }
   }
   if (s.phase === "lobby") renderLobby();
@@ -262,8 +285,8 @@ function bindHome() {
 
 function onResize() {
   updateDeviceClass();
-  // 版面（左右欄）變了，Phaser 要重新量一次畫布大小
-  requestAnimationFrame(() => game?.scale.refresh());
+  // 畫面大小變了，畫布跟著改
+  requestAnimationFrame(() => fitCanvas());
 }
 
 // ---------------------------------------------------------------- 啟動
@@ -289,6 +312,7 @@ function loop() {
 async function boot() {
   updateDeviceClass();
   window.addEventListener("resize", onResize);
+  new ResizeObserver(() => requestAnimationFrame(() => fitCanvas())).observe($("game-canvas"));
   window.addEventListener("orientationchange", () => setTimeout(onResize, 200));
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) return;
