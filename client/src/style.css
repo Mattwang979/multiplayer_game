@@ -635,6 +635,9 @@ body:not(.mobile) .group-bar { --gb-side: 120px; }
 .build-menu button em { font-style: normal; color: var(--gold); font-family: var(--stencil); }
 
 .target-hint { position: absolute; top: 90px; left: 50%; transform: translateX(-50%); padding: 6px 8px 6px 18px; background: rgba(35,19,12,.94); border: 1px solid var(--fire); font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 12px; white-space: nowrap; z-index: 4; }
+/* 提示條底下的道路也點得到，只有「取消」接收點擊 */
+.target-hint { pointer-events: none; }
+.target-hint button { pointer-events: auto; }
 
 /* 結算：左邊勝負與排名、右邊勢力變化圖、按鈕固定在下方 */
 .result { position: absolute; inset: 0; z-index: 10; display: flex; justify-content: center; background: linear-gradient(90deg, rgba(14,17,12,.97), rgba(14,17,12,.9) 45%, rgba(14,17,12,.95)); animation: fadein .6s; }

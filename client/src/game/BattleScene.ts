@@ -259,7 +259,7 @@ export class BattleScene extends Phaser.Scene {
     // 手指放開的事件有時候會遺失（例如按著的面板按鈕剛好被重畫、切到背景），
     // Phaser 就會以為那根手指一直按著，之後每次點地圖都被當成雙指縮放，整個點不動。
     // 每次有新的手指放下，用瀏覽器給的「目前所有手指」清掉已經不存在的觸控點。
-    const syncTouches = (e: TouchEvent) => this.syncTouches(e.touches);
+    const syncTouches = (e: TouchEvent) => this.syncTouches(e.touches, e.changedTouches);
     const releaseAll = () => this.releaseTouches();
     const onVisibility = () => document.hidden && releaseAll();
     window.addEventListener("touchstart", syncTouches, { capture: true, passive: true });
@@ -1852,13 +1852,21 @@ export class BattleScene extends Phaser.Scene {
     return this.input.manager.pointers.filter((pt, i) => i > 0 && pt.isDown && pt.downElement === canvas);
   }
 
-  /** 把瀏覽器已經沒有的觸控點當成放開（live = 瀏覽器目前所有按著的手指） */
-  private syncTouches(live: TouchList) {
+  /**
+   * 新手指放下時，把卡住的觸控點當成放開：
+   * - 瀏覽器已經沒有這根手指（live = 目前所有按著的手指）
+   * - 或是 id 跟剛放下的手指一樣（Android 會重複用 0、1…當 id）：剛放下的手指不可能早就按著，
+   *   一定是之前漏了放開事件。不清掉的話，Phaser 會把新手指的移動、放開都算到舊的觸控點上，
+   *   新的觸控點永遠卡住，之後單指拖曳變成縮放、每次點擊都被當成雙指手勢。
+   */
+  private syncTouches(live: TouchList, starting: TouchList) {
     const ids = new Set<number>();
     for (let i = 0; i < live.length; i++) ids.add(live[i].identifier);
+    const fresh = new Set<number>();
+    for (let i = 0; i < starting.length; i++) fresh.add(starting[i].identifier);
     let lost = false;
     this.input.manager.pointers.forEach((pt, i) => {
-      if (i === 0 || !pt.active || ids.has(pt.identifier)) return;
+      if (i === 0 || !pt.active || (ids.has(pt.identifier) && !fresh.has(pt.identifier))) return;
       this.forceUp(pt);
       lost = true;
     });
