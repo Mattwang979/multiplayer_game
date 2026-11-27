@@ -225,7 +225,7 @@ body:not(.mobile) .map-desc, body:not(.mobile) .map-n { font-size: 13px; }
 }
 .hud-top > * { pointer-events: auto; }
 .pcards { display: flex; gap: 6px; min-width: 0; }
-.pcard { width: 150px; min-width: 0; padding: 5px 8px; display: flex; flex-direction: column; gap: 5px; background: var(--hud); border: 1px solid var(--line); }
+.pcard { width: auto; min-width: 116px; max-width: 190px; flex: 0 1 auto; padding: 5px 8px; display: flex; flex-direction: column; gap: 5px; background: var(--hud); border: 1px solid var(--line); }
 .pcard.me { border-color: var(--gold); }
 .pcard.out { opacity: .5; }
 .pc-head { display: flex; align-items: center; gap: 5px; min-width: 0; }
@@ -382,7 +382,7 @@ body.drawer-open .hud-actions { display: none; }
 @keyframes cardflash { 0% { background: #5a4a1a } 100% { background: #1a1e15 } }
 
 /* 桌機螢幕大：介面放大一點 */
-body:not(.mobile) .pcard { width: 190px; padding: 6px 10px; }
+body:not(.mobile) .pcard { min-width: 170px; max-width: 240px; padding: 6px 10px; }
 body:not(.mobile) .pc-name { font-size: 14px; }
 body:not(.mobile) .pc-forts { font-size: 16px; }
 body:not(.mobile) .pcard .bar { height: 6px; }
@@ -400,17 +400,18 @@ body:not(.mobile) .ucard { width: 84px; height: 94px; }
 /* 選到部隊時的指令列：左下，全圖鈕旁邊，右邊留給技能鈕 */
 .group-bar {
   position: absolute; z-index: 4; left: max(78px, calc(env(safe-area-inset-left) + 66px)); bottom: max(12px, env(safe-area-inset-bottom));
-  max-width: calc(100% - 78px - 220px); min-height: 56px; box-sizing: border-box; padding: 6px 6px 6px 12px;
+  max-width: calc(100% - 78px - 220px); min-height: 50px; box-sizing: border-box; padding: 4px 4px 4px 10px;
   display: flex; align-items: center; gap: 6px; background: rgba(14,17,12,.95); border: 1px solid var(--gold); white-space: nowrap;
 }
-.gb-info { min-width: 0; margin-right: auto; display: flex; flex-direction: column; gap: 4px; }
+.gb-info { min-width: 0; max-width: 220px; margin-right: auto; display: flex; flex-direction: column; gap: 3px; }
 .gb-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 14px; }
 .gb-title b { flex: none; font-weight: 900; color: var(--gold); }
-.gb-comp { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; font-weight: 700; color: #cfc6aa; }
-.gb-sub { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--muted); }
-.gb-hp { flex: none; width: 70px; height: 4px; background: #2a3022; }
+.gb-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; font-weight: 700; }
+.gb-sub { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; color: var(--muted); }
+.gb-comp { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.gb-hp { flex: none; width: 44px; height: 4px; background: #2a3022; }
 .gb-hp i { display: block; height: 100%; }
-.group-bar button { flex: none; min-height: 42px; padding: 0 12px; display: flex; align-items: center; gap: 5px; background: var(--panel-2); border: 1px solid var(--line-2); color: var(--text); font-size: 13px; font-weight: 900; cursor: pointer; }
+.group-bar button { flex: none; min-height: 42px; padding: 0 10px; display: flex; align-items: center; gap: 5px; background: var(--panel-2); border: 1px solid var(--line-2); color: var(--text); font-size: 13px; font-weight: 900; cursor: pointer; }
 .group-bar button:hover:not(:disabled) { border-color: var(--gold); }
 .group-bar button:disabled { opacity: .45; cursor: default; }
 .group-bar button.on { border-color: var(--gold); background: #2a2412; }
@@ -466,7 +467,7 @@ body:not(.mobile) .ucard { width: 84px; height: 94px; }
 .res-sub { margin: 0 0 10px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 15px; font-weight: 700; }
 .res-en { font-family: var(--stencil); font-weight: 400; font-size: 15px; letter-spacing: 6px; color: var(--muted); }
 .res-rank { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.res-rank li { display: grid; grid-template-columns: 20px 22px minmax(0, 1fr) 40px 40px 56px; align-items: center; gap: 8px; min-height: 50px; box-sizing: border-box; padding: 6px 12px; background: #161a13; border: 1px solid var(--line); }
+.res-rank li { display: grid; grid-template-columns: 20px 22px minmax(0, 1fr) auto auto auto; align-items: center; gap: 10px; min-height: 50px; box-sizing: border-box; padding: 6px 12px; background: #161a13; border: 1px solid var(--line); }
 .res-rank li.me { background: #2a2412; border-color: var(--gold); }
 .res-rank li.out { opacity: .75; }
 .rk { font-family: var(--stencil); font-size: 20px; color: var(--muted); }
@@ -474,9 +475,9 @@ body:not(.mobile) .ucard { width: 84px; height: 94px; }
 .rn { display: flex; flex-direction: column; min-width: 0; }
 .rn b { font-size: 15px; font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rn small { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rs { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.15; }
+.rs { min-width: 38px; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.15; }
 .rs small { font-size: 11px; color: var(--muted); }
-.rs b { font-family: var(--stencil); font-weight: 400; font-size: 15px; }
+.rs b { font-weight: 900; font-size: 15px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .res-chart { align-self: center; max-height: 100%; box-sizing: border-box; min-height: 0; overflow: auto; padding: 10px 14px; background: rgba(22,26,19,.95); border: 1px solid var(--line); }
 .res-foot { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .res-me { margin: 0; min-width: 0; font-size: 13px; color: var(--muted); }
@@ -512,9 +513,6 @@ body:not(.mobile) .ucard { width: 84px; height: 94px; }
 .mobile-only { display: none !important; }
 .rotate-hint { display: none; }
 
-@media (max-width: 900px) {
-  .pcard { width: 130px; }
-}
 
 /* ================================================================
    手機橫向：地圖全螢幕，介面放四個角落
@@ -530,7 +528,7 @@ body.mobile .vignette { background: radial-gradient(ellipse at center, transpare
 body.mobile .event-chip { font-size: 11px; padding: 2px 8px; }
 body.mobile .group-bar button { padding: 0 10px; }
 
-body.mobile .pcard { width: 120px; padding: 4px 7px; gap: 4px; }
+body.mobile .pcard { min-width: 100px; max-width: 168px; padding: 4px 7px; gap: 4px; }
 body.mobile .timer strong, body.mobile .funds strong { font-size: 18px; }
 
 body.mobile .feed { display: none; }
@@ -543,7 +541,9 @@ body.mobile .target-hint .btn { min-height: 34px; }
 body.mobile .result-screen { grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 10px 16px; padding-top: max(14px, env(safe-area-inset-top)); padding-bottom: max(12px, env(safe-area-inset-bottom)); }
 body.mobile .res-title { font-size: 50px; letter-spacing: 10px; }
 body.mobile .res-sub { margin-bottom: 6px; font-size: 13px; }
-body.mobile .res-rank li { min-height: 42px; padding: 4px 10px; gap: 6px; grid-template-columns: 16px 20px minmax(0, 1fr) 34px 34px 50px; }
+body.mobile .res-rank li { min-height: 42px; padding: 4px 10px; gap: 8px; grid-template-columns: 16px 20px minmax(0, 1fr) auto auto auto; }
+body.mobile .rs { min-width: 30px; }
+body.mobile .rs b { font-size: 14px; }
 body.mobile .rn b { font-size: 13px; }
 body.mobile .res-chart { padding: 8px 10px; }
 body.mobile .res-chart .hist { gap: 5px; }

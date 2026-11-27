@@ -202,6 +202,7 @@ export class Hud {
     this.renderTop(me);
     this.renderBottom(me);
     this.renderGroupBar();
+    this.syncViewPad();
 
     this.updateMusic(me);
     if (s.phase === "ended" && !this.resultShown) {
@@ -487,13 +488,7 @@ export class Hud {
     const drawer = this.bottom.querySelector<HTMLElement>(".drawer")!;
     drawer.classList.toggle("hidden", !this.drawerOpen);
     document.body.classList.toggle("drawer-open", this.drawerOpen);
-    if (!this.drawerOpen) {
-      if (this.lastPad !== 0) {
-        this.lastPad = 0;
-        bus.emit("viewPad", { bottom: 0 });
-      }
-      return;
-    }
+    if (!this.drawerOpen) return;
     const node = session.selectedNode;
     const n = node >= 0 ? s.nodes[node] : undefined;
     const nd = node >= 0 ? this.map?.nodes[node] : undefined;
@@ -564,14 +559,26 @@ export class Hud {
       box.dataset.html = html;
       box.innerHTML = html;
     }
-    // 告訴地圖抽屜多高：被蓋住的據點捲上來
-    const h = drawer.offsetHeight;
-    if (h && h !== this.lastPad) {
-      this.lastPad = h;
-      document.documentElement.style.setProperty("--drawer-h", `${h}px`);
-      bus.emit("viewPad", { bottom: h, node: this.padNode });
-      this.padNode = -1;
+  }
+
+  /**
+   * 下方被蓋住多高（據點抽屜，或選部隊時的指令列）：告訴地圖，地圖就能多往上捲，
+   * 被蓋住的據點、部隊捲上來還是點得到；抽屜剛打開時把選的據點捲到抽屜上方
+   */
+  private syncViewPad() {
+    let pad = 0;
+    if (this.drawerOpen) {
+      pad = this.bottom.querySelector<HTMLElement>(".drawer")!.offsetHeight;
+      if (pad) document.documentElement.style.setProperty("--drawer-h", `${pad}px`);
+    } else if (!this.groupBar.classList.contains("hidden")) {
+      const r = this.groupBar.getBoundingClientRect();
+      pad = Math.max(0, window.innerHeight - r.top + 8);
     }
+    pad = Math.round(pad);
+    if (pad === this.lastPad && this.padNode < 0) return;
+    this.lastPad = pad;
+    bus.emit("viewPad", { bottom: pad, node: this.drawerOpen ? this.padNode : -1 });
+    if (pad > 0 || !this.drawerOpen) this.padNode = -1;
   }
 
   /** 選到部隊時的指令列（左下，全圖鈕旁邊）：組成、平均血量、去哪，停下／撤退／到了進駐／取消 */
@@ -609,8 +616,8 @@ export class Hud {
     if (!bar.querySelector(".gb-info")) {
       const hk = (k: string) => (isMobile() ? "" : `<kbd>${k}</kbd>`);
       bar.innerHTML = `<div class="gb-info">
-          <span class="gb-title"><b data-gb-n></b><span class="gb-comp" data-gb-comp></span></span>
-          <span class="gb-sub"><span class="gb-hp"><i data-gb-hp></i></span><span data-gb-where></span></span>
+          <span class="gb-title"><b data-gb-n></b><span class="gb-where" data-gb-where></span></span>
+          <span class="gb-sub"><span class="gb-hp"><i data-gb-hp></i></span><span class="gb-comp" data-gb-comp></span></span>
         </div>
         <button data-g="garrison" class="on">${ICON_FORT}進駐</button>
         <button data-g="halt">${ICON_STOP}停下${hk("S")}</button>
@@ -620,8 +627,9 @@ export class Hud {
     }
     const q = <T extends HTMLElement>(sel: string) => bar.querySelector<T>(sel)!;
     setText(q("[data-gb-n]"), `${units.length} 支`);
-    setText(q("[data-gb-comp]"), comp);
-    setText(q("[data-gb-where]"), `${Math.round(ratio * 100)}%・${where}`);
+    setText(q("[data-gb-comp]"), `${Math.round(ratio * 100)}%・${comp}`);
+    q("[data-gb-comp]").title = comp;
+    setText(q("[data-gb-where]"), where);
     const hpBar = q("[data-gb-hp]");
     hpBar.style.width = `${Math.round(ratio * 100)}%`;
     hpBar.style.background = hpColor;
@@ -633,7 +641,7 @@ export class Hud {
     enter.classList.toggle("on", session.enter);
     enter.setAttribute("aria-pressed", String(session.enter));
     q("[data-gb-check]").classList.toggle("hidden", !session.enter);
-    setText(q("[data-gb-enter]"), session.enter ? "到了進駐" : "到了進駐 ✗");
+    setText(q("[data-gb-enter]"), session.enter ? "到了進駐" : "不進駐");
     bar.classList.remove("hidden");
   }
 
@@ -1079,14 +1087,16 @@ export class Hud {
     const players: PlayerState[] = [];
     s.players.forEach((p) => players.push(p));
     players.sort((a, b) => (a.rank || 9) - (b.rank || 9));
-    const money = (v: number) => (v >= 10000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toLocaleString()}`);
+    const money = (v: number) => (v >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v}`);
     const rows = players
       .map((p) => {
         const f = FACTIONS[p.faction];
         const out = this.history?.out.find((o) => o.id === p.id);
-        const tags = [f.name];
+        // 陣營看徽章顏色就知道；有電腦難度、出局時間時就不寫陣營名，免得被截掉
+        const tags: string[] = [];
         if (p.isBot && isBotLevel(p.botLevel)) tags.push(`電腦 ${BOT_LEVEL_DEFS[p.botLevel].name}`);
         if (!p.alive) tags.push(out ? `${Math.floor(out.t / 60)}:${String(Math.floor(out.t % 60)).padStart(2, "0")} 出局` : "出局");
+        if (!tags.length) tags.push(f.name);
         return `<li class="${p.id === me.id ? "me" : ""}${p.alive ? "" : " out"}">
           <span class="rk">${p.rank || "-"}</span>${emblem(f.emblem, f.css, f.mark, 22)}
           <span class="rn"><b>${esc(p.name)}${p.id === me.id ? "（你）" : ""}</b><small style="color:${f.light}">${tags.join("・")}</small></span>
