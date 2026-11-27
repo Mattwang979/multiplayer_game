@@ -2,9 +2,9 @@
 import "./style.css";
 import Phaser from "phaser";
 import { KICK_CODE } from "@frontline/shared";
-import { canFullscreen, enterFullscreen, isMobile, updateDeviceClass } from "./device";
+import { canFullscreen, enterFullscreen, exitFullscreen, isMobile, isStandalone, updateDeviceClass } from "./device";
 import { BattleScene } from "./game/BattleScene";
-import { initAudio, play, startMusic, stopMusic } from "./game/sound";
+import { initAudio, isMusicOn, isMuted, play, startMusic, stopMusic, toggleMusic, toggleMute } from "./game/sound";
 import { createRoom, errorText, forgetRoom, joinRoom, rememberRoom, tryReconnect, type GameRoom } from "./net";
 import { bus, session } from "./session";
 import { Hud } from "./ui/hud";
@@ -278,9 +278,80 @@ function bindHome() {
   $("btn-leave").addEventListener("click", () => leaveRoom());
   $("btn-fullscreen").addEventListener("click", async () => {
     initAudio();
+    play("click");
+    if (document.fullscreenElement) {
+      await exitFullscreen();
+      return;
+    }
     const tip = await enterFullscreen();
     homeError(tip ?? "");
   });
+  bindHomeTools();
+}
+
+/** 首頁下排：規則視窗、設定（配樂／音效）、全螢幕按鈕的字 */
+function bindHomeTools() {
+  const rules = $("rules");
+  const pop = $("home-settings");
+  const setBtn = $("btn-settings");
+  const openRules = (open: boolean) => {
+    rules.classList.toggle("open", open);
+    if (open) $("btn-rules-close").focus();
+    else $("btn-rules").focus();
+  };
+  const drawSettings = () => {
+    pop.querySelector('[data-set="music"]')!.setAttribute("aria-pressed", String(isMusicOn()));
+    pop.querySelector('[data-set="sound"]')!.setAttribute("aria-pressed", String(!isMuted()));
+  };
+  const openSettings = (open: boolean) => {
+    pop.classList.toggle("hidden", !open);
+    setBtn.setAttribute("aria-expanded", String(open));
+    if (open) drawSettings();
+  };
+  $("btn-rules").addEventListener("click", () => {
+    play("click");
+    openSettings(false);
+    openRules(true);
+  });
+  $("btn-rules-close").addEventListener("click", () => openRules(false));
+  // 點規則卡片外面的暗處也能關
+  rules.addEventListener("click", (e) => {
+    if (e.target === rules) openRules(false);
+  });
+  setBtn.addEventListener("click", () => {
+    play("click");
+    openSettings(pop.classList.contains("hidden"));
+  });
+  pop.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-set]");
+    if (!b) return;
+    initAudio();
+    if (b.dataset.set === "music") toggleMusic();
+    else toggleMute();
+    drawSettings();
+    play("click");
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if (pop.classList.contains("hidden")) return;
+    const t = e.target as Node;
+    if (!pop.contains(t) && !setBtn.contains(t)) openSettings(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || $("screen-home").classList.contains("hidden")) return;
+    if (rules.classList.contains("open")) openRules(false);
+    else if (!pop.classList.contains("hidden")) {
+      openSettings(false);
+      setBtn.focus();
+    }
+  });
+  // 已經是全螢幕（或從主畫面開）就把按鈕改成「退出全螢幕」或藏起來
+  const fsBtn = $("btn-fullscreen");
+  const drawFs = () => {
+    fsBtn.classList.toggle("hidden", isStandalone());
+    fsBtn.querySelector("[data-fs-label]")!.textContent = document.fullscreenElement ? "退出全螢幕" : "全螢幕";
+  };
+  drawFs();
+  document.addEventListener("fullscreenchange", drawFs);
 }
 
 function onResize() {
@@ -320,8 +391,6 @@ async function boot() {
     refreshCanvasSoon();
   });
   $("btn-recover").addEventListener("click", () => rebuildGame("玩家按了重新載入"));
-  $("btn-rules").addEventListener("click", () => $("rules").classList.add("open"));
-  $("btn-rules-close").addEventListener("click", () => $("rules").classList.remove("open"));
   document.addEventListener("fullscreenchange", onResize);
   bindHome();
   bindLobbyActions();
