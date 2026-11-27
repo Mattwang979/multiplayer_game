@@ -88,8 +88,6 @@ import {
   UPGRADES,
   UPGRADE_KINDS,
   WINNER_DRAW,
-  WORLD_H,
-  WORLD_W,
   buildMap,
   getMapDef,
   lanePoint,
@@ -1267,7 +1265,7 @@ export class Battle {
     a.x += Math.cos(a.angle) * step;
     a.y += Math.sin(a.angle) * step;
     const m = 160;
-    if (a.x < -m || a.y < -m || a.x > WORLD_W + m || a.y > WORLD_H + m) {
+    if (a.x < -m || a.y < -m || a.x > this.map.w + m || a.y > this.map.h + m) {
       this.state.aircraft.delete(a.id);
       this.lastHit.delete(a.id);
     }

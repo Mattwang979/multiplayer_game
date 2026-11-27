@@ -206,23 +206,27 @@ function mapPreview(def: MapDef) {
   const layout = buildMap(def.id);
   const bg = { grass: "#a9c46c", river: "#a3c26a", desert: "#e2cf97", highland: "#b7c28a" }[def.theme];
   const pts = (p: [number, number][]) => p.map(([x, y]) => `${x},${y}`).join(" ");
-  let g = `<rect width="1600" height="1000" fill="${bg}"/>`;
-  if (def.river) g += `<polyline points="${pts(def.river)}" fill="none" stroke="#5f9bbd" stroke-width="70" stroke-linejoin="round"/>`;
+  const W = layout.w;
+  const H = layout.h;
+  // 大地圖縮圖裡的線條、據點跟著放大，縮小後粗細才跟一般地圖一樣
+  const k = Math.max(W / 1600, H / 1000);
+  let g = `<rect width="${W}" height="${H}" fill="${bg}"/>`;
+  if (def.river) g += `<polyline points="${pts(def.river)}" fill="none" stroke="#5f9bbd" stroke-width="${70 * k}" stroke-linejoin="round"/>`;
   for (const [x, y, rx, ry] of def.lakes ?? []) g += `<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="${ry}" fill="#5f9bbd"/>`;
-  for (const m of def.mountains ?? []) g += `<polygon points="${pts(m)}" fill="#8d8573" stroke="#5e574a" stroke-width="8"/>`;
+  for (const m of def.mountains ?? []) g += `<polygon points="${pts(m)}" fill="#8d8573" stroke="#5e574a" stroke-width="${8 * k}"/>`;
   for (const lane of layout.lanes) {
     const line = lane.pts.filter((_, i) => i % 3 === 0 || i === lane.pts.length - 1).map((p) => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join(" ");
-    g += `<polyline points="${line}" fill="none" stroke="#7c6a45" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>`;
+    g += `<polyline points="${line}" fill="none" stroke="#7c6a45" stroke-width="${30 * k}" stroke-linecap="round" stroke-linejoin="round"/>`;
   }
   for (const nd of def.nodes) {
-    if (nd.kind === "hq") g += `<rect x="${nd.x - 46}" y="${nd.y - 46}" width="92" height="92" fill="#f2c14e" stroke="#1d1d17" stroke-width="12"/>`;
+    if (nd.kind === "hq") g += `<rect x="${nd.x - 46 * k}" y="${nd.y - 46 * k}" width="${92 * k}" height="${92 * k}" fill="#f2c14e" stroke="#1d1d17" stroke-width="${12 * k}"/>`;
     else {
-      const r = nd.big ? 46 : 30;
+      const r = (nd.big ? 46 : 30) * k;
       const fill = nd.slot >= 0 ? "#ece4cf" : "#8d887a";
-      g += `<circle cx="${nd.x}" cy="${nd.y}" r="${r}" fill="${fill}" stroke="#1d1d17" stroke-width="10"/>`;
+      g += `<circle cx="${nd.x}" cy="${nd.y}" r="${r}" fill="${fill}" stroke="#1d1d17" stroke-width="${10 * k}"/>`;
     }
   }
-  const svg = `<svg viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" aria-hidden="true">${g}</svg>`;
+  const svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">${g}</svg>`;
   previews.set(def.id, svg);
   return svg;
 }
@@ -240,13 +244,11 @@ function renderMaps(choice: string, count: number, isHost: boolean, unlimited: b
     ? `<button class="map-arrow prev" data-map="${MAP_IDS[(idx - 1 + MAP_IDS.length) % MAP_IDS.length]}" aria-label="上一張地圖"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
        <button class="map-arrow next" data-map="${MAP_IDS[(idx + 1) % MAP_IDS.length]}" aria-label="下一張地圖"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>`
     : "";
-  const dots = MAP_IDS.map((id) => {
-    const name = id === "random" ? "隨機" : (MAPS.find((x) => x.id === id)?.name ?? id);
-    return `<button class="map-dot${id === choice ? " on" : ""}" data-map="${id}" aria-label="${name}" aria-pressed="${id === choice}"${isHost ? "" : " disabled"}><i></i></button>`;
-  }).join("");
+  // 地圖多了，點點排不下：改成「第幾張／共幾張」
+  const dots = `<span class="map-count">${idx === 0 ? "隨機" : `${idx} / ${MAP_IDS.length - 1}`}</span>`;
   const html = `<div class="map-view">${thumb}${arrows}</div>
     <div class="map-info">
-      <div class="map-title"><span class="map-name">${m ? m.name : "隨機地圖"}</span><span class="map-dots">${dots}</span></div>
+      <div class="map-title"><span class="map-name">${m ? m.name : "隨機地圖"}${m && (m.w ?? 1600) > 1600 ? '<em class="map-big">大地圖</em>' : ""}</span><span class="map-dots">${dots}</span></div>
       <p class="map-desc${fits ? "" : " warn"}">${m ? (fits ? m.desc : `目前 ${count} 方，這張最多 ${m.slots} 方；開戰時會改成隨機`) : "從符合人數的地圖裡抽一張"}</p>
       <p class="map-n">${range}・${unlimited ? "不限時" : "10 分鐘"}${isHost ? "" : "・房主選圖"}</p>
     </div>`;

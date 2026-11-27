@@ -151,6 +151,13 @@ export class BattleScene extends Phaser.Scene {
   private fx!: Fx;
   private ground?: Phaser.GameObjects.Image;
   private margin?: Phaser.GameObjects.TileSprite;
+  /** 這張地圖的寬高（大地圖比較大） */
+  private get mapW() {
+    return this.map?.w ?? WORLD_W;
+  }
+  private get mapH() {
+    return this.map?.h ?? WORLD_H;
+  }
   private riverExt: Phaser.GameObjects.Image[] = [];
   private padBottomCss = 0; // 下方抽屜蓋住的高度（CSS 像素）：鏡頭可以多往下捲這麼多
   private territory!: Phaser.GameObjects.Graphics;
@@ -330,6 +337,13 @@ export class BattleScene extends Phaser.Scene {
     this.paintMargin();
     this.cameras.main.removeBounds();
     this.resetView();
+    // 大地圖在手機上看全圖太小：開局先放大到自己的大本營附近（按「全圖」可以縮回去）
+    if (M() && (this.mapW > WORLD_W || this.mapH > WORLD_H)) {
+      const hq = session.me()?.hq ?? -1;
+      const nd = hq >= 0 ? this.map.nodes[hq] : undefined;
+      const cam = this.cameras.main;
+      if (nd) this.setView(this.fitZoom() * 1.7, nd.x, nd.y, cam.width / 2, cam.height / 2);
+    }
 
     this.map.nodes.forEach((nd) => {
       const img = this.add.image(nd.x, nd.y, "fortNeutral").setDepth(DEPTH.structure);
@@ -445,7 +459,7 @@ export class BattleScene extends Phaser.Scene {
     }
     this.margin?.destroy();
     this.margin = this.add
-      .tileSprite(-MARGIN_X, -MARGIN_Y, WORLD_W + MARGIN_X * 2, WORLD_H + MARGIN_Y * 2, key)
+      .tileSprite(-MARGIN_X, -MARGIN_Y, this.mapW + MARGIN_X * 2, this.mapH + MARGIN_Y * 2, key)
       .setOrigin(0)
       .setDepth(DEPTH.ground - 2);
 
@@ -454,7 +468,7 @@ export class BattleScene extends Phaser.Scene {
     this.riverExt = [];
     if (!def.river) return;
     const pts = extendRiver(def.river);
-    const inside = (p: Vec) => p.x >= 0 && p.x <= WORLD_W && p.y >= 0 && p.y <= WORLD_H;
+    const inside = (p: Vec) => p.x >= 0 && p.x <= this.mapW && p.y >= 0 && p.y <= this.mapH;
     const first = pts.findIndex(inside);
     let last = -1;
     pts.forEach((p, i) => inside(p) && (last = i));
@@ -493,7 +507,7 @@ export class BattleScene extends Phaser.Scene {
   /** 畫一次整張地面（地形、河流、湖、山、道路、橋、樹），之後當成一張圖用 */
   private paintGround(key: string) {
     const def = this.map.def;
-    const tex = this.textures.createCanvas(key, WORLD_W, WORLD_H)!;
+    const tex = this.textures.createCanvas(key, this.mapW, this.mapH)!;
     const c = tex.getContext();
     const rand = mulberry(def.id.length * 977 + def.nodes.length * 13);
     const R = (a: number, b: number) => a + rand() * (b - a);
@@ -502,11 +516,11 @@ export class BattleScene extends Phaser.Scene {
     const look = GROUND[theme];
     const { base, patches } = look;
     c.fillStyle = base;
-    c.fillRect(0, 0, WORLD_W, WORLD_H);
+    c.fillRect(0, 0, this.mapW, this.mapH);
     for (let i = 0; i < 90; i++) {
       c.fillStyle = patches[i % 2];
       c.beginPath();
-      c.ellipse(R(0, WORLD_W), R(0, WORLD_H), R(40, 170), R(20, 80), R(0, 3), 0, Math.PI * 2);
+      c.ellipse(R(0, this.mapW), R(0, this.mapH), R(40, 170), R(20, 80), R(0, 3), 0, Math.PI * 2);
       c.fill();
     }
     const sand = (x: number, y: number, r: number) => {
@@ -520,13 +534,13 @@ export class BattleScene extends Phaser.Scene {
       c.fill();
     };
     if (theme !== "desert") {
-      for (let i = 0; i < 6; i++) sand(R(100, WORLD_W - 100), R(100, WORLD_H - 100), R(80, 170));
+      for (let i = 0; i < 6; i++) sand(R(100, this.mapW - 100), R(100, this.mapH - 100), R(80, 170));
       for (const nd of def.nodes) if (nd.kind === "hq") sand(nd.x, nd.y, 120);
     } else {
       // 沙丘紋路
       for (let i = 0; i < 60; i++) {
-        const x = R(0, WORLD_W);
-        const y = R(0, WORLD_H);
+        const x = R(0, this.mapW);
+        const y = R(0, this.mapH);
         const w = R(60, 160);
         c.strokeStyle = i % 2 ? "rgba(190,165,105,0.45)" : "rgba(245,232,190,0.6)";
         c.lineWidth = R(2, 4);
@@ -539,12 +553,12 @@ export class BattleScene extends Phaser.Scene {
     // 大塊明暗和細砂（跟外圍貼圖同一個週期，接起來是連續的）
     c.save();
     c.imageSmoothingEnabled = true;
-    c.drawImage(groundNoise(theme, WORLD_W, WORLD_H, MARGIN_X, MARGIN_Y), 0, 0, WORLD_W, WORLD_H);
+    c.drawImage(groundNoise(theme, this.mapW, this.mapH, MARGIN_X, MARGIN_Y), 0, 0, this.mapW, this.mapH);
     c.restore();
     // 細碎草葉／小石子
     for (let i = 0; i < 2600; i++) {
-      const x = R(0, WORLD_W);
-      const y = R(0, WORLD_H);
+      const x = R(0, this.mapW);
+      const y = R(0, this.mapH);
       if (theme === "desert") {
         c.fillStyle = rand() < 0.5 ? "rgba(170,150,100,0.5)" : "rgba(250,240,210,0.6)";
         c.fillRect(x, y, 2, 2);
@@ -569,10 +583,10 @@ export class BattleScene extends Phaser.Scene {
       c.fillStyle = g;
       c.fillRect(rx, ry, rw, rh);
     };
-    band(0, 0, F, 0, 0, 0, F, WORLD_H);
-    band(WORLD_W, 0, WORLD_W - F, 0, WORLD_W - F, 0, F, WORLD_H);
-    band(0, 0, 0, F, 0, 0, WORLD_W, F);
-    band(0, WORLD_H, 0, WORLD_H - F, 0, WORLD_H - F, WORLD_W, F);
+    band(0, 0, F, 0, 0, 0, F, this.mapH);
+    band(this.mapW, 0, this.mapW - F, 0, this.mapW - F, 0, F, this.mapH);
+    band(0, 0, 0, F, 0, 0, this.mapW, F);
+    band(0, this.mapH, 0, this.mapH - F, 0, this.mapH - F, this.mapW, F);
     c.restore();
 
     const strokePath = (pts: Vec[]) => {
@@ -761,8 +775,8 @@ export class BattleScene extends Phaser.Scene {
     };
     const treeCount = theme === "desert" ? 22 : theme === "highland" ? 45 : 75;
     for (let i = 0; i < treeCount; i++) {
-      const x = R(20, WORLD_W - 20);
-      const y = R(20, WORLD_H - 20);
+      const x = R(20, this.mapW - 20);
+      const y = R(20, this.mapH - 20);
       if (!clear(x, y, 60)) continue;
       const n = 1 + Math.floor(rand() * (theme === "desert" ? 2 : 4));
       for (let k = 0; k < n; k++) {
@@ -802,8 +816,8 @@ export class BattleScene extends Phaser.Scene {
     }
     const rocks = theme === "grass" || theme === "river" ? 30 : 70;
     for (let i = 0; i < rocks; i++) {
-      const x = R(20, WORLD_W - 20);
-      const y = R(20, WORLD_H - 20);
+      const x = R(20, this.mapW - 20);
+      const y = R(20, this.mapH - 20);
       if (!clear(x, y, 46)) continue;
       const [rx, ry, a] = [R(5, 13), R(4, 9), R(0, 3)];
       drawRock(c, x, y, rx, ry, a, look);
@@ -921,7 +935,7 @@ export class BattleScene extends Phaser.Scene {
         }
         // 靠近地圖邊緣時把名字往內推，不要被切掉
         const half = v.label.width / 2 + 6;
-        v.label.setX(Math.max(half, Math.min(WORLD_W - half, nd.x)));
+        v.label.setX(Math.max(half, Math.min(this.mapW - half, nd.x)));
       }
       if (n.shots !== v.shots) {
         v.shots = n.shots;
@@ -1828,7 +1842,7 @@ export class BattleScene extends Phaser.Scene {
   /** 剛好看到整張地圖的縮放倍數（扣掉下方抽屜） */
   private fitZoom() {
     const cam = this.cameras.main;
-    return Math.min(cam.width / WORLD_W, cam.height / WORLD_H);
+    return Math.min(cam.width / this.mapW, cam.height / this.mapH);
   }
 
   /** 現在放大了幾倍（1 = 全圖） */
@@ -1838,7 +1852,7 @@ export class BattleScene extends Phaser.Scene {
 
   private resetView() {
     const cam = this.cameras.main;
-    this.setView(this.fitZoom(), WORLD_W / 2, WORLD_H / 2, cam.width / 2, cam.height / 2);
+    this.setView(this.fitZoom(), this.mapW / 2, this.mapH / 2, cam.width / 2, cam.height / 2);
   }
 
   /** 下方抽屜打開／關上：鏡頭可以多往下捲，被蓋住的據點捲到抽屜上方 */
@@ -1882,9 +1896,9 @@ export class BattleScene extends Phaser.Scene {
     const pad = (Math.max(this.padBottomCss, BASE_PAD_CSS) * (this.scale.width / Math.max(1, rect.width))) / z;
     let cx = cam.scrollX + cam.width / 2;
     let cy = cam.scrollY + cam.height / 2;
-    cx = vw >= WORLD_W ? WORLD_W / 2 : Math.max(vw / 2, Math.min(WORLD_W - vw / 2, cx));
-    if (vh - pad >= WORLD_H) cy = WORLD_H / 2 + pad / 2;
-    else cy = Math.max(Math.min(vh / 2, WORLD_H / 2 + pad / 2), Math.min(WORLD_H - vh / 2 + pad, cy));
+    cx = vw >= this.mapW ? this.mapW / 2 : Math.max(vw / 2, Math.min(this.mapW - vw / 2, cx));
+    if (vh - pad >= this.mapH) cy = this.mapH / 2 + pad / 2;
+    else cy = Math.max(Math.min(vh / 2, this.mapH / 2 + pad / 2), Math.min(this.mapH - vh / 2 + pad, cy));
     cam.scrollX = cx - cam.width / 2;
     cam.scrollY = cy - cam.height / 2;
     this.zoomBtn?.classList.toggle("hidden", this.relZoom() < 1.02);

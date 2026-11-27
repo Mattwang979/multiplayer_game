@@ -232,7 +232,7 @@ body.mobile:not(.portrait) .arm-detail { gap: 6px; padding: 8px 10px; }
 body.mobile:not(.portrait) .arm-art { max-height: 58px; }
 body.mobile:not(.portrait) .ad-head h3 { font-size: 20px; }
 body.mobile:not(.portrait) .ad-cost { font-size: 13px; }
-body.mobile:not(.portrait) .ac-name { font-size: clamp(11px, 1.65vw, 14px); }
+body.mobile:not(.portrait) .ac-name { font-size: clamp(11px, 1.4vw, 14px); }
 body.mobile:not(.portrait) .ad-k { width: 26px; }
 body.mobile:not(.portrait) .ad-chips { gap: 3px; }
 body.mobile:not(.portrait) .am-chip { padding: 0 4px; font-size: 11px; }
@@ -378,7 +378,9 @@ body:not(.mobile) .time-seg button { min-height: 42px; font-size: 14px; }
 .map-info { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 4px; }
 .map-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .map-name { font-size: 16px; font-weight: 900; }
-.map-dots { display: flex; }
+.map-dots { display: flex; flex: none; }
+.map-count { font-size: 12px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.map-big { margin-left: 6px; padding: 0 5px; font-style: normal; font-size: 11px; font-weight: 900; color: #1b1405; background: var(--gold); vertical-align: 2px; }
 .map-dot { width: 20px; height: 28px; padding: 0; border: 0; background: transparent; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .map-dot:disabled { cursor: default; }
 .map-dot i { width: 6px; height: 6px; background: var(--line-2); }

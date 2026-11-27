@@ -922,7 +922,7 @@ export class Hud {
     }
     if (k === "A") return this.pickAll();
     // 數字鍵：買兵（Shift + 數字 = 多選一支要派出的）
-    const code = /^Digit(\d)$/.exec(e.code)?.[1] ?? (e.code === "Minus" ? "-" : undefined);
+    const code = /^Digit(\d)$/.exec(e.code)?.[1] ?? (e.code === "Minus" ? "-" : e.code === "Equal" ? "=" : undefined);
     const unit = UNIT_TYPES.find((t) => UNITS[t].hotkey === (code ?? k));
     if (unit) {
       this.tab = Math.max(0, UNIT_GROUPS.findIndex((g) => g.types.includes(unit)));

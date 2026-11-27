@@ -2,6 +2,8 @@
 // 道路上的位置用「沿路的像素距離」表示：0 在 a 端，lane.len 在 b 端。
 // 共 4 張不同地形的地圖；人數不足時，沒人用的大本營和堡壘會變成無主據點。
 
+import { BIG_MAPS } from "./maps-big";
+
 export const WORLD_W = 1600;
 export const WORLD_H = 1000;
 
@@ -32,6 +34,8 @@ export interface MapDef {
   name: string;
   desc: string;
   theme: Theme;
+  w?: number; // 地圖寬高（預設 WORLD_W × WORLD_H）
+  h?: number;
   slots: number; // 最多幾人
   minPlayers: number;
   slotOrder: Record<number, number[]>; // 幾個人時用哪些位置
@@ -57,6 +61,8 @@ export interface MapNode extends NodeDef {
 export interface MapLayout {
   id: string;
   def: MapDef;
+  w: number;
+  h: number;
   nodes: MapNode[];
   lanes: LaneGeom[];
   adj: number[][]; // 每個據點相連的道路
@@ -65,7 +71,8 @@ export interface MapLayout {
 
 // ---------------------------------------------------------------- 地圖資料
 
-export const MAPS: MapDef[] = [
+/** 原本的四張（1600×1000） */
+const CLASSIC_MAPS: MapDef[] = [
   {
     id: "fortress",
     name: "四方要塞",
@@ -202,6 +209,10 @@ export const MAPS: MapDef[] = [
   },
 ];
 
+/** 全部地圖：原本四張加上十張大地圖 */
+export const MAPS: MapDef[] = [...CLASSIC_MAPS, ...BIG_MAPS];
+
+
 export function getMapDef(id: string): MapDef | undefined {
   return MAPS.find((m) => m.id === id);
 }
@@ -264,7 +275,9 @@ export function buildMap(id: string): MapLayout {
     adj[l.a].push(i);
     adj[l.b].push(i);
   });
-  const layout: MapLayout = { id: def.id, def, nodes, lanes, adj, center: { x: WORLD_W / 2, y: WORLD_H / 2 } };
+  const w = def.w ?? WORLD_W;
+  const h = def.h ?? WORLD_H;
+  const layout: MapLayout = { id: def.id, def, w, h, nodes, lanes, adj, center: { x: w / 2, y: h / 2 } };
   cache.set(def.id, layout);
   return layout;
 }
