@@ -3,6 +3,7 @@
 import {
   AIRCRAFT,
   AIR_KINDS,
+  BOT_LEVEL_DEFS,
   BUILD_KINDS,
   BARRACKS_CAP,
   BARRACKS_DISCOUNT,
@@ -24,6 +25,7 @@ import {
   UPGRADE_KINDS,
   WINNER_DRAW,
   buildMap,
+  isBotLevel,
   type AirKind,
   type BattleHistory,
   type EventKind,
@@ -114,9 +116,14 @@ export class Hud {
       bus.on("airDown", (m: { kind: AirKind }) => this.addFeed(`${AIRCRAFT[m.kind].name === "空降" ? "運輸機" : "轟炸機"}被擊落！`, "#ff9a5c")),
       bus.on("newBattle", () => this.resetForBattle()),
       bus.on("history", (h: BattleHistory) => {
+        const first = !this.history;
         this.history = h;
-        const mount = this.result.querySelector<HTMLElement>(".hist-mount");
-        if (mount) mountHistory(mount, h, session.myId);
+        // 結算已經開著：重畫一次（出局時間在這份資料裡）
+        if (first && !this.result.classList.contains("hidden")) this.showResult(false);
+        else {
+          const mount = this.result.querySelector<HTMLElement>(".hist-mount");
+          if (mount) mountHistory(mount, h, session.myId);
+        }
       }),
       bus.on("event", (m: { kind: EventKind; players?: string[] }) => this.onEvent(m)),
       bus.on("eventEnd", () => this.addFeed("事件結束", "#bfb9a6")),
@@ -1061,38 +1068,55 @@ export class Hud {
 
   // ================================================================ 結算
 
-  private showResult() {
+  /** 結算：左邊勝負與排名，右邊勢力變化圖，按鈕固定在右下（不會被捲走或被系統提示蓋住） */
+  private showResult(sound = true) {
     const s = session.state;
     const me = session.me();
     if (!s || !me) return;
     const win = s.winnerId === me.id;
     const draw = s.winnerId === WINNER_DRAW;
-    const title = draw ? "平手" : win ? "勝利" : "戰敗";
+    const [title, en] = draw ? ["平手", "DRAW"] : win ? ["勝利", "VICTORY"] : ["戰敗", "DEFEAT"];
     const players: PlayerState[] = [];
     s.players.forEach((p) => players.push(p));
     players.sort((a, b) => (a.rank || 9) - (b.rank || 9));
+    const money = (v: number) => (v >= 10000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toLocaleString()}`);
     const rows = players
       .map((p) => {
         const f = FACTIONS[p.faction];
-        return `<tr><td class="rank">${p.rank || "-"}</td><td style="color:${f.light};font-weight:900">${f.name}</td><td>${esc(p.name)}${p.id === me.id ? "（你）" : ""}</td><td>${p.kills}</td><td>${p.captures}</td><td>${p.deployed}</td><td>$${p.spent.toLocaleString()}</td></tr>`;
+        const out = this.history?.out.find((o) => o.id === p.id);
+        const tags = [f.name];
+        if (p.isBot && isBotLevel(p.botLevel)) tags.push(`電腦 ${BOT_LEVEL_DEFS[p.botLevel].name}`);
+        if (!p.alive) tags.push(out ? `${Math.floor(out.t / 60)}:${String(Math.floor(out.t % 60)).padStart(2, "0")} 出局` : "出局");
+        return `<li class="${p.id === me.id ? "me" : ""}${p.alive ? "" : " out"}">
+          <span class="rk">${p.rank || "-"}</span>${emblem(f.emblem, f.css, f.mark, 22)}
+          <span class="rn"><b>${esc(p.name)}${p.id === me.id ? "（你）" : ""}</b><small style="color:${f.light}">${tags.join("・")}</small></span>
+          <span class="rs"><small>佔領</small><b>${p.captures}</b></span>
+          <span class="rs"><small>擊殺</small><b>${p.kills}</b></span>
+          <span class="rs"><small>花費</small><b>${money(p.spent)}</b></span>
+        </li>`;
       })
       .join("");
     const isHost = s.hostId === me.id;
-    this.result.innerHTML = `<div class="result-box">
-      <h2 class="${win ? "" : "lose"}">${title}</h2>
-      <p class="reason">${esc(s.endReason)}</p>
-      <table><thead><tr><th>名次</th><th>陣營</th><th>指揮官</th><th>擊殺</th><th>佔領</th><th>買兵</th><th>花費</th></tr></thead><tbody>${rows}</tbody></table>
-      <div class="hist-mount"><p class="hist-empty">載入勢力變化圖…</p></div>
-      <div class="actions">
-        ${isHost ? '<button class="btn primary" data-act="again">回到作戰室再戰</button>' : '<p style="margin:0;color:#a89f84">等房主開下一局…</p>'}
-        <button class="btn" data-act="leave">離開房間</button>
+    this.result.innerHTML = `<div class="result-screen">
+      <section class="res-left">
+        <h2 class="res-title ${draw ? "draw" : win ? "win" : "lose"}">${title}</h2>
+        <p class="res-sub"><span class="res-en">${en}</span><span>${esc(s.endReason)}</span></p>
+        <ol class="res-rank">${rows}</ol>
+      </section>
+      <section class="res-chart"><div class="hist-mount"><p class="hist-empty">載入勢力變化圖…</p></div></section>
+      <div class="res-foot">
+        <p class="res-me">你這局：買兵 ${me.deployed}・花費 $${me.spent.toLocaleString()}・佔領 ${me.captures} 座・擊殺 ${me.kills}</p>
+        <div class="res-actions">
+          <button class="btn" data-act="leave">離開房間</button>
+          ${isHost ? '<button class="btn primary" data-act="again">再戰一局</button>' : '<p class="res-wait">等房主開下一局…</p>'}
+        </div>
       </div>
     </div>`;
     this.result.classList.remove("hidden");
     const mount = this.result.querySelector<HTMLElement>(".hist-mount")!;
     if (this.history) mountHistory(mount, this.history, me.id);
     else session.send("history"); // 中途重連的人沒收到廣播，跟伺服器要
-    play(win ? "victory" : "defeat", 1);
+    if (sound) play(win ? "victory" : "defeat", 1);
   }
 
   private onResultClick = (e: MouseEvent) => {
