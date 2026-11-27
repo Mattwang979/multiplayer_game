@@ -34,8 +34,34 @@ function useCanvasRenderer() {
   }
 }
 
-// 畫布鋪滿整個畫面（地圖全螢幕），用裝置像素比畫，手機上才清楚；最多 2 倍，省電也省記憶體
-const dprNow = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+// 畫布鋪滿整個畫面（地圖全螢幕），用裝置像素比畫，手機上才清楚；最多 2 倍，省電也省記憶體。
+// 大戰時手機跟不上（持續低於約 38 fps），就自動把解析度降一級（2 → 1.5 → 1），這一局都不再調回去
+let dprCap = 2;
+const dprNow = () => Math.min(dprCap, Math.max(1, window.devicePixelRatio || 1));
+let perfFrames = 0;
+let perfStart = 0;
+let perfLast = 0;
+function watchFrameRate(now: number) {
+  const playing = session.state?.phase === "playing" && !document.hidden;
+  if (!playing || now - perfLast > 250) {
+    // 不在對局中、或剛從背景回來（中間停很久）：重新計
+    perfLast = now;
+    perfStart = now;
+    perfFrames = 0;
+    return;
+  }
+  perfLast = now;
+  perfFrames += 1;
+  if (now - perfStart < 3000) return;
+  const avg = (now - perfStart) / perfFrames;
+  perfStart = now;
+  perfFrames = 0;
+  if (avg > 26 && dprNow() > 1) {
+    dprCap = Math.max(1, dprNow() - 0.5);
+    console.info(`[前線] 畫面太忙（平均 ${avg.toFixed(0)}ms/格），解析度降到 ${dprCap}x`);
+    fitCanvas();
+  }
+}
 function canvasSize() {
   const r = $("game-canvas").getBoundingClientRect();
   return {
@@ -50,8 +76,15 @@ function fitCanvas() {
   const { w, h } = canvasSize();
   const dpr = dprNow();
   const sm = game.scale;
+  // 先設縮放再改大小，畫面 resize 事件發出時場景就看得到新的解析度（用來換算鏡頭，看到的範圍不變）
   if (Math.abs(sm.zoom - 1 / dpr) > 1e-3) sm.setZoom(1 / dpr);
   if (Math.round(sm.width) !== Math.round(w * dpr) || Math.round(sm.height) !== Math.round(h * dpr)) sm.resize(w * dpr, h * dpr);
+  // Phaser 改縮放時會用舊的寬度算 CSS 大小，解析度降下來後畫面就比螢幕還大。直接指定 CSS 大小
+  const cv = game.canvas;
+  if (cv) {
+    cv.style.width = `${w}px`;
+    cv.style.height = `${h}px`;
+  }
   sm.refresh();
 }
 
@@ -68,6 +101,9 @@ function createGame() {
     scene: [BattleScene],
     disableContextMenu: true,
     banner: false,
+    // Phaser 預設在手機上每批只用 1 張貼圖：戰場上有幾十種兵種／陣營貼圖，大戰時一格要畫四百次，手機就卡了。
+    // 現在的手機 GPU 一批用多張貼圖沒問題，關掉後一格只要十幾次
+    render: { autoMobileTextures: false },
   });
   const g = game;
   g.events.once("ready", () => {
@@ -393,6 +429,7 @@ function onResize() {
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
+  watchFrameRate(now);
   if (now - lastWatch > 1000) {
     lastWatch = now;
     try {

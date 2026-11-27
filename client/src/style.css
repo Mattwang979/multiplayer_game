@@ -420,8 +420,9 @@ body:not(.mobile) .map-desc, body:not(.mobile) .map-n { font-size: 13px; }
 .grain {
   position: absolute; inset: -50%; pointer-events: none; opacity: .07; mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/></filter><rect width='160' height='160' filter='url(%23n)'/></svg>");
-  animation: grain 0.6s steps(4) infinite;
 }
+/* 手機：底片顆粒疊在每格都在變的畫布上，要整個畫面重新混色，很耗電又會卡；地圖本身已經有細砂紋理 */
+body.mobile .grain { display: none; }
 @keyframes grain { 0% { transform: translate(0,0) } 25% { transform: translate(-3%,2%) } 50% { transform: translate(2%,-3%) } 75% { transform: translate(-2%,-1%) } 100% { transform: translate(0,0) } }
 
 /* ---------- 戰場 HUD：地圖全螢幕，介面放四個角落 ---------- */

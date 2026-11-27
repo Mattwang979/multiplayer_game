@@ -100,6 +100,7 @@ export function initAudio() {
   noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
   const d = noise.getChannelData(0);
   for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  void bakeCombat();
   // 播一個極短的空白聲音，解鎖 iOS
   const b = ctx.createBufferSource();
   b.buffer = ctx.createBuffer(1, 1, 22050);
@@ -235,13 +236,84 @@ function crackle(t: number, span: number, count: number, gain: number) {
 const NOTE = (n: number) => 440 * Math.pow(2, (n - 69) / 12); // MIDI 音高轉頻率
 
 /** volume：0~1，依距離畫面中心遠近調整 */
+/** 戰鬥音效（大戰時一秒可能觸發上百次）：共用一個額度，介面音效不受影響 */
+const COMBAT: Partial<Record<Kind, true>> = { rifle: true, mg: true, cannon: true, at: true, shell: true, boom: true, bigboom: true, flak: true, sniper: true, flame: true };
+const BUDGET_RATE = 20; // 每秒最多幾個戰鬥音效
+const BUDGET_MAX = 8;
+let budget = BUDGET_MAX;
+let budgetAt = 0;
+
 export function play(kind: Kind, volume = 1) {
   if (!ctx || muted || volume <= 0.02) return;
   const now = ctx.currentTime;
   const gap = MIN_GAP[kind] ?? 0;
   if (now - (last.get(kind) ?? -1) < gap) return;
+  if (COMBAT[kind]) {
+    // 每個音效都會建好幾個音訊節點，手機上一秒建上百個會卡：超過額度就不播；額度快用完時只播近的
+    budget = Math.min(BUDGET_MAX, budget + (now - budgetAt) * BUDGET_RATE);
+    budgetAt = now;
+    if (budget < 1 || (budget < 4 && volume < 0.35)) return;
+    budget -= 1;
+  }
   last.set(kind, now);
   const v = Math.min(1.2, volume);
+  // 戰鬥音效已經預先錄好：只要一個播放器＋一個音量，不用每次即時合成十幾個節點
+  const takes = baked.get(kind);
+  if (takes?.length && ctx && master) {
+    const src = ctx.createBufferSource();
+    src.buffer = takes[Math.floor(Math.random() * takes.length)];
+    src.playbackRate.value = 0.94 + Math.random() * 0.12;
+    const g = ctx.createGain();
+    g.gain.value = v;
+    src.connect(g).connect(master);
+    src.start(now);
+    return;
+  }
+  synth(kind, now, v);
+}
+
+// ---------------------------------------------------------------- 預錄戰鬥音效
+// 大戰時每秒幾十發槍砲聲，每發即時合成要建 3～24 個節點（每個都有濾波器），手機會卡。
+// 開啟音效時先用離線音訊把每種聲音各錄三個版本，之後播錄好的就好。
+const BAKE_LEN: Partial<Record<Kind, number>> = {
+  rifle: 0.25, mg: 0.35, cannon: 0.6, at: 0.4, shell: 0.85, boom: 1.3, bigboom: 2.2, flak: 0.4, sniper: 0.75, flame: 0.55,
+};
+const baked = new Map<Kind, AudioBuffer[]>();
+let baking = false;
+
+async function bakeCombat() {
+  if (baking || !ctx || !noise || typeof OfflineAudioContext === "undefined") return;
+  baking = true;
+  const rate = 22050;
+  for (const [kind, len] of Object.entries(BAKE_LEN) as [Kind, number][]) {
+    const takes: AudioBuffer[] = [];
+    for (let k = 0; k < 3; k++) {
+      try {
+        const off = new OfflineAudioContext(1, Math.ceil(len * rate), rate);
+        const g = off.createGain();
+        g.connect(off.destination);
+        // 合成函式用的是模組裡的 ctx／master：暫時換成離線的，建好節點馬上換回來
+        const keepCtx: AudioContext | null = ctx;
+        const keepMaster: GainNode | null = master;
+        ctx = off as unknown as AudioContext;
+        master = g;
+        try {
+          synth(kind, 0, 1);
+        } finally {
+          ctx = keepCtx;
+          master = keepMaster;
+        }
+        takes.push(await off.startRendering());
+      } catch {
+        // 這台不支援離線錄音：照舊即時合成
+      }
+    }
+    if (takes.length) baked.set(kind, takes);
+  }
+}
+
+/** 即時合成一個音效（介面音效、或還沒錄好的戰鬥音效） */
+function synth(kind: Kind, now: number, v: number) {
   switch (kind) {
     case "sniper":
       // 尖銳槍響＋長長的回音

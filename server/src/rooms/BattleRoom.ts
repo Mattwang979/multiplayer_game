@@ -93,6 +93,11 @@ export class BattleRoom extends Room<{ state: BattleState }> {
       const id = typeof msg?.map === "string" ? msg.map : "random";
       if (id === "random" || MAPS.some((m) => m.id === id)) this.state.mapChoice = id;
     },
+    /** 開發測試：一次生很多兵（正式環境沒設 DEV_CHEATS 就不理會） */
+    devSpawn: (client: Client, msg: { n?: number }) => {
+      if (process.env.DEV_CHEATS !== "1" || this.state.phase !== "playing" || !this.isHost(client)) return;
+      this.battle.devSpawn(Math.max(1, Math.min(150, num(msg?.n))));
+    },
     /** 房主切換「不限時」 */
     setUnlimited: (client: Client, msg: { on?: boolean }) => {
       if (!this.isHost(client) || this.state.phase !== "lobby") return;

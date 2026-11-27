@@ -67,6 +67,7 @@ export class Fx {
   private time = 0;
   private shakeMag = 0;
   scale = 1; // 手機上特效整體放大
+  budget = 1400; // 同時最多幾個粒子（手機比較少）
 
   constructor(private scene: Phaser.Scene) {
     this.gfx = scene.add.graphics().setDepth(DEPTH.projectile);
@@ -87,7 +88,7 @@ export class Fx {
       rise?: number; depth?: number; add?: boolean; tint?: number; rot?: number; tints?: number[]; fade?: number; stretch?: number;
     },
   ) {
-    if (this.parts.length > 1400) return;
+    if (this.parts.length > this.budget) return;
     const img = this.get(tex, o.depth ?? DEPTH.groundFx);
     img.setPosition(x, y);
     if (o.add) img.setBlendMode(Phaser.BlendModes.ADD);

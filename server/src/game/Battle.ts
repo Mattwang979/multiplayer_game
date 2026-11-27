@@ -348,6 +348,21 @@ export class Battle {
     return null;
   }
 
+  /** 開發測試用：每個玩家在大本營生 n 支隨機兵種，全部派去地圖中央（只有設了 DEV_CHEATS 才會被呼叫） */
+  devSpawn(n: number) {
+    const c = this.map.center;
+    let center = 0;
+    this.map.nodes.forEach((nd, i) => {
+      if (Math.hypot(nd.x - c.x, nd.y - c.y) < Math.hypot(this.map.nodes[center].x - c.x, this.map.nodes[center].y - c.y)) center = i;
+    });
+    this.state.players.forEach((p) => {
+      if (!p.alive || p.hq < 0) return;
+      for (let i = 0; i < n; i++) this.addUnit(p, UNIT_TYPES[Math.floor(this.rng() * UNIT_TYPES.length)], { node: p.hq });
+      for (let k = 0; k < 20; k++) if (this.dispatch(p.id, p.hq, [], [], { node: center }, false) !== null) break;
+    });
+    this.updateTally();
+  }
+
   /** 停下：野外的部隊就地駐守（取消移動、撤退），附近有敵人照樣會開火 */
   halt(playerId: string, unitIds: string[]): string | null {
     const p = this.activePlayer(playerId);

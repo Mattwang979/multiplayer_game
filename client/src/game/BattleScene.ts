@@ -107,6 +107,7 @@ interface UnitView {
   wx: number;
   wy: number;
   angle: number;
+  shown: number; // 目前顯示幾個人（看血量；縮很小時最多 2 個）
 }
 
 interface StructView {
@@ -160,7 +161,14 @@ export class BattleScene extends Phaser.Scene {
   }
   private riverExt: Phaser.GameObjects.Image[] = [];
   private padBottomCss = 0; // 下方抽屜蓋住的高度（CSS 像素）：鏡頭可以多往下捲這麼多
-  private territory!: Phaser.GameObjects.Graphics;
+  private territory!: Phaser.GameObjects.Graphics; // 每格都重畫的小東西：交戰位置、選取圈、選到部隊的路線
+  // 領土色帶：畫進一張貼圖，只有主人或前線位置變了才重畫（每格重畫幾千個頂點，手機會卡）
+  private terrPaint?: Phaser.GameObjects.Graphics;
+  private terrTex?: Phaser.Textures.DynamicTexture;
+  private terrImg?: Phaser.GameObjects.Image;
+  private terrKey = "";
+  private terrAt = -1;
+  private terrScale = 1;
   private bars!: Phaser.GameObjects.Graphics;
   private units = new Map<string, UnitView>();
   private structs = new Map<string, StructView>();
@@ -199,6 +207,7 @@ export class BattleScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor("#7f9a4e");
     this.fx = new Fx(this);
     this.fx.scale = M() ? 1.3 : 1;
+    this.fx.budget = M() ? 450 : 900;
     this.territory = this.add.graphics().setDepth(DEPTH.territory);
     this.bars = this.add.graphics().setDepth(DEPTH.bars);
     this.crosshair = this.add.image(0, 0, "target").setDepth(DEPTH.overlay).setVisible(false);
@@ -256,9 +265,20 @@ export class BattleScene extends Phaser.Scene {
       bus.on("viewPad", (m: { bottom: number; node?: number }) => this.setViewPad(m.bottom, m.node)),
     );
     // 畫面大小改變（轉向、全螢幕、網址列收起）：還在全圖就重新對齊全圖，放大中就維持
+    let lastDpr = 1 / this.scale.zoom;
+    let lastW = this.cameras.main.width, lastH = this.cameras.main.height;
     const onResized = () => {
-      if (!this.map) return;
       const cam = this.cameras.main;
+      // 畫布變大變小時 Phaser 只保留左上角，畫面中心會跑掉：記下原本的中心再擺回去
+      const mx = cam.scrollX + lastW / 2, my = cam.scrollY + lastH / 2;
+      lastW = cam.width;
+      lastH = cam.height;
+      // 解析度自動調降：畫布像素變少，鏡頭縮放跟著換算，畫面不會突然拉遠
+      const dpr = 1 / this.scale.zoom;
+      if (Math.abs(dpr - lastDpr) > 1e-3) cam.setZoom(cam.zoom * (dpr / lastDpr));
+      lastDpr = dpr;
+      if (!this.map) return;
+      cam.centerOn(mx, my);
       if (cam.zoom <= this.fitZoom() * 1.02 || this.relZoom() < 1.02) this.resetView();
       else this.clampCamera();
     };
@@ -335,6 +355,7 @@ export class BattleScene extends Phaser.Scene {
     if (!this.textures.exists(key)) this.paintGround(key);
     this.ground = this.add.image(0, 0, key).setOrigin(0).setDepth(DEPTH.ground);
     this.paintMargin();
+    this.setupTerritoryTexture();
     this.cameras.main.removeBounds();
     this.resetView();
     // 大地圖在手機上看全圖太小：開局先放大到自己的大本營附近（按「全圖」可以縮回去）
@@ -939,7 +960,7 @@ export class BattleScene extends Phaser.Scene {
       }
       if (n.shots !== v.shots) {
         v.shots = n.shots;
-        this.nodeFired(v, n);
+        if (this.onScreen(v.wx, v.wy, 80) || this.onScreenLane(n.tl, n.tx)) this.nodeFired(v, n);
       }
       if (n.airShots !== v.airShots) {
         v.airShots = n.airShots;
@@ -979,7 +1000,7 @@ export class BattleScene extends Phaser.Scene {
       .setDepth(DEPTH.unitShadow)
       .setScale((u.type === "tank" ? 1 : VEHICLE_TEX[u.type] ? 0.85 : 0.7) * (this.unitScale / UNIT_SCALE_DESKTOP));
     const men: Phaser.GameObjects.Image[] = [];
-    const v: UnitView = { c, men, shadow, x: u.x, lane: u.lane, shots: u.shots, hp: u.hp, maxHp: u.maxHp, type: u.type, wx: 0, wy: 0, angle: 0 };
+    const v: UnitView = { c, men, shadow, x: u.x, lane: u.lane, shots: u.shots, hp: u.hp, maxHp: u.maxHp, type: u.type, wx: 0, wy: 0, angle: 0, shown: -1 };
     if (u.type === "tank") {
       v.gun = this.add.image(0, 0, `tank${f}`);
       v.turret = this.add.image(-2, 0, `turret${f}`).setOrigin(12 / 48, 0.5);
@@ -1004,6 +1025,8 @@ export class BattleScene extends Phaser.Scene {
 
   private syncUnits(dt: number) {
     const s = session.state!;
+    // 縮得很小：一個兵不到 9 個 CSS 像素，影子和隊形細節都看不到
+    const far = this.cssPerWorld() * this.unitScale * 18 < 9;
     const seen = new Set<string>();
     s.units.forEach((u) => {
       if (u.inNode >= 0) return; // 駐紮在據點裡：看不到
@@ -1035,6 +1058,9 @@ export class BattleScene extends Phaser.Scene {
       v.angle = angle;
       v.c.setPosition(p.x, p.y).setRotation(angle);
       v.shadow.setPosition(p.x + 3, p.y + 5);
+      // 畫面外的部隊不畫（放大看局部時省很多）
+      const vis = this.onScreen(p.x, p.y, 60);
+      if (v.c.visible !== vis) v.c.setVisible(vis);
 
       const left = u.landT - s.time;
       if (v.chute) {
@@ -1056,18 +1082,26 @@ export class BattleScene extends Phaser.Scene {
 
       const ratio = u.maxHp > 0 ? u.hp / u.maxHp : 0;
       if (v.men.length) {
-        const visible = Math.max(1, Math.ceil(v.men.length * ratio - 0.01));
-        const form = FORMATION[v.type] ?? FORMATION.rifle;
-        v.men.forEach((m, i) => {
-          m.setVisible(i < visible);
-          if (!u.attacking) m.y = form[i][1] + Math.sin(this.clock * 10 + i * 1.7) * 0.8;
-        });
+        // 人數照血量；縮得很小時（看不出幾個人）最多畫 2 個，省一大堆圖
+        let shown = Math.max(1, Math.ceil(v.men.length * ratio - 0.01));
+        if (far) shown = Math.min(shown, 2);
+        if (shown !== v.shown) {
+          v.shown = shown;
+          v.men.forEach((m, i) => m.setVisible(i < shown));
+        }
+        // 走路時微微上下晃：只在看得清楚的時候算
+        if (!far && vis && !u.attacking) {
+          const form = FORMATION[v.type] ?? FORMATION.rifle;
+          for (let i = 0; i < shown; i++) v.men[i].y = form[i][1] + Math.sin(this.clock * 10 + i * 1.7) * 0.8;
+        }
       }
+      if (v.shadow.visible !== (vis && !far)) v.shadow.setVisible(vis && !far);
       v.hp = u.hp;
       v.maxHp = u.maxHp;
       if (u.shots !== v.shots) {
         v.shots = u.shots;
-        this.unitFired(v, u);
+        // 開火特效和聲音：射手和目標都在畫面外就省掉
+        if (vis || this.onScreenLane(u.tl, u.tx)) this.unitFired(v, u);
       }
       if (u.type === "flak") {
         const seenShots = this.airShotsSeen.get(u.id);
@@ -1268,7 +1302,7 @@ export class BattleScene extends Phaser.Scene {
       }
       if (st.shots !== v.shots) {
         v.shots = st.shots;
-        this.structureFired(v, st);
+        if (this.onScreen(v.wx, v.wy, 80) || this.onScreenLane(st.tl, st.tx)) this.structureFired(v, st);
       }
       if (st.airShots !== v.airShots) {
         v.airShots = st.airShots;
@@ -1494,10 +1528,35 @@ export class BattleScene extends Phaser.Scene {
 
   // ---------------------------------------------------------------- 領土、血條、出兵點
 
-  private drawTerritory() {
+  /** 領土色帶的貼圖（換地圖時重建）：大地圖用 0.75 倍解析度省顯示記憶體 */
+  private setupTerritoryTexture() {
+    this.terrImg?.destroy();
+    const old = this.terrTex?.key;
+    if (old && this.textures.exists(old)) this.textures.remove(old);
+    this.terrScale = Math.min(1, 1800 / Math.max(this.mapW, this.mapH));
+    const k = this.terrScale;
+    const key = `territory-${this.map.id}-${Date.now()}`;
+    this.terrTex = this.textures.addDynamicTexture(key, Math.ceil(this.mapW * k), Math.ceil(this.mapH * k)) ?? undefined;
+    this.terrPaint ??= this.make.graphics({}, false);
+    this.terrImg = this.terrTex ? this.add.image(0, 0, key).setOrigin(0).setScale(1 / k).setDepth(DEPTH.territory) : undefined;
+    this.terrKey = "";
+  }
+
+  /** 各條路的主人和前線位置有變（前線每 10 單位算一格）才重畫色帶，最多每 0.15 秒一次 */
+  private paintTerritoryBands() {
     const s = session.state!;
-    const g = this.territory;
-    g.clear();
+    const parts: string[] = [];
+    this.map.lanes.forEach((lane, li) => {
+      const pa = session.ownerOf(lane.a);
+      const pb = session.ownerOf(lane.b);
+      parts.push(`${pa?.faction ?? -1}.${pb?.faction ?? -1}.${Math.round((s.fronts[li] ?? 0) / 10)}`);
+    });
+    const key = parts.join("|");
+    if (key === this.terrKey || this.clock - this.terrAt < 0.15 || !this.terrTex || !this.terrPaint) return;
+    this.terrKey = key;
+    this.terrAt = this.clock;
+    const g = this.terrPaint;
+    g.clear().setScale(this.terrScale);
     this.map.lanes.forEach((lane, li) => {
       const front = s.fronts[li] ?? lane.len / 2;
       const seg = (from: number, to: number, off = 0) => {
@@ -1522,6 +1581,21 @@ export class BattleScene extends Phaser.Scene {
       const pb = session.ownerOf(lane.b);
       if (pa) paint(pa.faction, 0, front);
       if (pb) paint(pb.faction, front, lane.len);
+    });
+    this.terrTex.clear();
+    this.terrTex.draw(g);
+    this.terrTex.render();
+  }
+
+  private drawTerritory() {
+    const s = session.state!;
+    this.paintTerritoryBands();
+    const g = this.territory;
+    g.clear();
+    this.map.lanes.forEach((lane, li) => {
+      const front = s.fronts[li] ?? lane.len / 2;
+      const pa = session.ownerOf(lane.a);
+      const pb = session.ownerOf(lane.b);
       // 交戰位置（兩端是不同主人時才畫）
       if ((pa || pb) && pa?.id !== pb?.id) {
         const fp = lanePoint(lane, front);
@@ -1614,6 +1688,7 @@ export class BattleScene extends Phaser.Scene {
       g.fillRect(x - w / 2, y, w * Math.max(0, Math.min(1, ratio)), h);
     };
     this.units.forEach((v) => {
+      if (!v.c.visible) return;
       const r = v.maxHp > 0 ? v.hp / v.maxHp : 0;
       if (r < 0.999) bar(v.wx, v.wy - 22 * (this.unitScale / UNIT_SCALE_DESKTOP), M() ? 34 : 22, r, hpColor(r));
     });
@@ -1902,6 +1977,18 @@ export class BattleScene extends Phaser.Scene {
     cam.scrollX = cx - cam.width / 2;
     cam.scrollY = cy - cam.height / 2;
     this.zoomBtn?.classList.toggle("hidden", this.relZoom() < 1.02);
+  }
+
+  /** 世界座標 (x, y) 在不在畫面裡（往外多算 margin） */
+  private onScreen(x: number, y: number, margin = 0) {
+    const v = this.cameras.main.worldView;
+    return x >= v.x - margin && x <= v.right + margin && y >= v.y - margin && y <= v.bottom + margin;
+  }
+  private onScreenLane(lane: number, x: number) {
+    const l = this.map?.lanes[lane];
+    if (!l) return false;
+    const p = lanePoint(l, x);
+    return this.onScreen(p.x, p.y, 80);
   }
 
   /** 1 個世界單位在螢幕上是幾個 CSS 像素 */
