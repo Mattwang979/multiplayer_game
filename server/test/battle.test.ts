@@ -24,6 +24,8 @@ import {
 } from "@frontline/shared";
 import { Battle } from "../src/game/Battle";
 import { BotBrain } from "../src/game/Bot";
+import { makeBrain, type Brain } from "../src/game/brains";
+import { GeneralBrain } from "../src/game/General";
 import { BattleState, Player, type Unit } from "../src/game/schema";
 
 const DT = 1 / TICK_RATE;
@@ -412,14 +414,14 @@ for (const def of MAPS) {
     test(`${def.name}：${n} 個電腦混戰可以正常打完一局`, () => {
       const { battle, state, events } = setup(n, def.id, 40 + n);
       const rng = seeded(7 + n);
-      const bots: BotBrain[] = [];
+      const bots: Brain[] = [];
       // 每張地圖、每種人數輪流用不同難度，四種難度都會跑到
       let k = n;
       state.players.forEach((p) => {
         const level = BOT_LEVELS[k++ % BOT_LEVELS.length];
         p.isBot = p.wasBot = true;
         p.botLevel = level;
-        bots.push(new BotBrain(p.id, rng, level));
+        bots.push(makeBrain(p.id, level, rng));
       });
       let steps = 0;
       let maxPop = 0;
@@ -636,15 +638,17 @@ test("隨機事件：燃料短缺時戰車變慢、戰功懸賞時賞金加倍",
 });
 
 // ---------- 電腦難度 ----------
-function botMatch(levels: BotLevel[], map: string, seed: number) {
+/** levels 是房間裡的難度；old = true 的位置改用原本的電腦腦袋（比較新舊用） */
+function botMatch(levels: BotLevel[], map: string, seed: number, old: boolean[] = []) {
   const { battle, state } = setup(levels.length, map, seed);
   const rng = seeded(seed * 7 + 1);
-  const bots: BotBrain[] = [];
+  const bots: Brain[] = [];
   let i = 0;
   state.players.forEach((p) => {
     p.isBot = p.wasBot = true;
     p.botLevel = levels[i];
-    bots.push(new BotBrain(p.id, rng, levels[i++]));
+    bots.push(old[i] ? new BotBrain(p.id, rng, levels[i]) : makeBrain(p.id, levels[i], rng));
+    i++;
   });
   let steps = 0;
   while (state.phase === "playing" && steps < 700 / DT) {
@@ -680,6 +684,46 @@ test("電腦難度：困難電腦大多打得贏簡單電腦", () => {
   }
   console.log(`  困難 vs 簡單：6 場贏 ${wins} 場`);
   assert.ok(wins >= 4, `困難只贏 ${wins} 場`);
+});
+
+test("將軍：地獄打贏原本的地獄電腦（換邊打）", () => {
+  const maps = ["pass", "river", "oasis", "fortress"];
+  let wins = 0;
+  for (let i = 0; i < 8; i++) {
+    const newFirst = i % 2 === 0;
+    const w = botMatch(["brutal", "brutal"], maps[i % 4], 900 + i, newFirst ? [false, true] : [true, false]);
+    if (w === (newFirst ? "p0" : "p1")) wins++;
+  }
+  console.log(`  新地獄 vs 舊地獄：8 場贏 ${wins} 場`);
+  assert.ok(wins >= 7, `新地獄只贏 ${wins} 場`);
+});
+
+test("將軍：困難（反應慢一點）也打得贏原本的地獄電腦", () => {
+  const maps = ["pass", "river", "oasis"];
+  let wins = 0;
+  for (let i = 0; i < 6; i++) {
+    const newFirst = i % 2 === 0;
+    const w = botMatch(newFirst ? ["hard", "brutal"] : ["brutal", "hard"], maps[i % 3], 950 + i, newFirst ? [false, true] : [true, false]);
+    if (w === (newFirst ? "p0" : "p1")) wins++;
+  }
+  console.log(`  新困難 vs 舊地獄：6 場贏 ${wins} 場`);
+  assert.ok(wins >= 4, `新困難只贏 ${wins} 場`);
+});
+
+test("將軍的戰鬥模擬：剋制關係跟引擎一致", () => {
+  const g = new GeneralBrain("p0") as unknown as {
+    debugStack(type: UnitType, budget: number): unknown;
+    simulate(a: unknown[], b: unknown[], maxT?: number): { win: boolean; aLeft: number; bLeft: number };
+  };
+  const fight = (a: UnitType, b: UnitType) => g.simulate([g.debugStack(a, 660)], [g.debugStack(b, 660)], 150);
+  // 等價對打：反戰車砲剋戰車、戰車剋步兵、步兵剋反戰車砲、狙擊手剋機槍（引擎實測，見 scripts/duels.ts）
+  for (const [a, b] of [["at", "tank"], ["tank", "rifle"], ["rifle", "at"], ["tank", "flame"], ["car", "sniper"]] as [UnitType, UnitType][]) {
+    const r = fight(a, b);
+    assert.ok(r.win && r.aLeft > r.bLeft, `${a} 應該打贏 ${b}：${JSON.stringify(r)}`);
+  }
+  // 兵多打兵少
+  const r = g.simulate([g.debugStack("rifle", 1000)], [g.debugStack("rifle", 400)]);
+  assert.ok(r.win && r.aLeft > 0.5);
 });
 
 // ---------- 再戰一局的勢力變化圖 ----------

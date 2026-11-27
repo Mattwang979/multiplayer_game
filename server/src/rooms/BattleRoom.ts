@@ -22,6 +22,7 @@ import {
 } from "@frontline/shared";
 import { Battle } from "../game/Battle";
 import { BotBrain } from "../game/Bot";
+import { makeBrain, type Brain } from "../game/brains";
 import { BattleState, Player } from "../game/schema";
 
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -46,7 +47,7 @@ export class BattleRoom extends Room<{ state: BattleState }> {
   state = new BattleState();
 
   private battle!: Battle;
-  private bots = new Map<string, BotBrain>();
+  private bots = new Map<string, Brain>();
   private botCounter = 0;
 
   messages = {
@@ -249,7 +250,7 @@ export class BattleRoom extends Room<{ state: BattleState }> {
       let brain = this.bots.get(p.id);
       if (!brain) {
         // 原本就是電腦的照房主設的難度；真人斷線由電腦代管就用普通
-        brain = new BotBrain(p.id, Math.random, p.wasBot && isBotLevel(p.botLevel) ? p.botLevel : "normal");
+        brain = p.wasBot && isBotLevel(p.botLevel) ? makeBrain(p.id, p.botLevel) : new BotBrain(p.id, Math.random, "normal");
         this.bots.set(p.id, brain);
       }
       brain.update(this.battle, dt);
