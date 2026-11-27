@@ -725,3 +725,28 @@ test("堡壘被攻破後，守軍站在門口不能趁攻方還在附近時馬�
   run(battle, 4);
   assert.equal(state.nodes[fort].owner, b.id);
 });
+
+// ---------- 停下 ----------
+test("停下：行進中的部隊就地駐守，不再往前走；撤退中的也能叫停", () => {
+  const { battle, state } = setup(2, "pass");
+  const lane = laneBetween(battle, 0, 7);
+  const geom = battle.map.lanes[lane];
+  const d0 = nodeDir(geom, 0);
+  const [a, b] = place(battle, "p0", "rifle", lane, nodeEnd(geom, 0) + d0 * 150, d0, 7, 2);
+  run(battle, 1);
+  assert.equal(battle.halt("p0", [a.id, b.id]), null);
+  const x0 = a.x;
+  run(battle, 3);
+  assert.ok(Math.abs(a.x - x0) < 0.5, `停下後還在走：${x0} → ${a.x}`);
+  assert.equal(a.mode, "hold");
+  assert.equal(a.group, b.group);
+  // 撤退中叫停
+  assert.equal(battle.retreat("p0", [a.id]), null);
+  run(battle, 0.5);
+  assert.equal(battle.halt("p0", [a.id]), null);
+  const x1 = a.x;
+  run(battle, 2);
+  assert.ok(Math.abs(a.x - x1) < 0.5);
+  // 別人的部隊、駐軍不能叫停
+  assert.equal(battle.halt("p1", [a.id]), "沒有選到野外的部隊");
+});

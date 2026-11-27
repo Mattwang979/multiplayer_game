@@ -132,6 +132,9 @@ export class BattleRoom extends Room<{ state: BattleState }> {
     retreat: (client: Client, msg: { units?: unknown }) => {
       this.reply(client, this.battle.retreat(client.sessionId, idList(msg?.units)));
     },
+    halt: (client: Client, msg: { units?: unknown }) => {
+      this.reply(client, this.battle.halt(client.sessionId, idList(msg?.units)));
+    },
     build: (client: Client, msg: { lane?: number; node?: number; slot?: number; kind?: string }) => {
       const kind = msg?.kind as BuildKind;
       if (!BUILD_KINDS.includes(kind)) return;

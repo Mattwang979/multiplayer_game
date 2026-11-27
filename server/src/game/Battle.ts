@@ -334,6 +334,25 @@ export class Battle {
     return ok > 0 ? null : "走不到那裡";
   }
 
+  /** 停下：野外的部隊就地駐守（取消移動、撤退），附近有敵人照樣會開火 */
+  halt(playerId: string, unitIds: string[]): string | null {
+    const p = this.activePlayer(playerId);
+    if (!p) return "現在不能下指令";
+    const units = this.ownUnits(playerId, unitIds).filter((u) => u.inNode < 0);
+    if (units.length === 0) return "沒有選到野外的部隊";
+    const group = `g${this.nextId++}`;
+    for (const u of units) {
+      u.route.clear();
+      u.destNode = -1;
+      u.destLane = u.lane;
+      u.destX = u.x;
+      u.enter = false;
+      u.group = group;
+      u.mode = "hold";
+    }
+    return null;
+  }
+
   /** 撤退：回到最近的自己據點並進駐（撤退途中不會開火，跑得比較快） */
   retreat(playerId: string, unitIds: string[]): string | null {
     const p = this.activePlayer(playerId);

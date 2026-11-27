@@ -50,6 +50,10 @@ const ICON_FS_EXIT = svg('<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>');
 const ICON_MENU = svg('<path d="M4 7h16M4 12h16M4 17h16"/>');
 const ICON_X = svg('<path d="M6 6l12 12M18 6L6 18"/>');
 const ICON_UP = svg('<path d="M12 19V5M6 11l6-6 6 6"/>');
+const ICON_STOP = svg('<rect x="6" y="6" width="12" height="12" rx="1"/>');
+const ICON_BACK = svg('<path d="M10 7L5 12l5 5M5 12h10a4 4 0 0 1 4 4v1"/>');
+const ICON_CHECK = svg('<path d="M5 12l5 5 9-10"/>');
+const ICON_FORT = svg('<path d="M4 20V9l4 2V7l4 2 4-2v4l4-2v11z"/><path d="M10 20v-4h4v4"/>');
 const ICON_DRAG = svg('<path d="M9 11V5a2 2 0 0 1 4 0v6M13 10a2 2 0 0 1 4 0v3M9 11a2 2 0 0 0-4 0v3c0 4 3 7 7 7h1a5 5 0 0 0 5-5v-3"/>');
 const setText = (el: Element, t: string) => {
   if (el.textContent !== t) el.textContent = t;
@@ -563,7 +567,7 @@ export class Hud {
     }
   }
 
-  /** 選到部隊時的指令列 */
+  /** 選到部隊時的指令列（左下，全圖鈕旁邊）：組成、平均血量、去哪，停下／撤退／到了進駐／取消 */
   private renderGroupBar() {
     const s = session.state!;
     const ids = session.selectedUnits;
@@ -574,28 +578,55 @@ export class Hud {
     }
     const units = ids.map((id) => s.units.get(id)).filter((u): u is UnitState => !!u);
     const byType = new Map<string, number>();
-    units.forEach((u) => byType.set(u.type, (byType.get(u.type) ?? 0) + 1));
-    const desc = [...byType.entries()].map(([t, c]) => `${UNITS[t as UnitType]?.name ?? t}×${c}`).join("、");
+    let hp = 0;
+    let maxHp = 0;
+    units.forEach((u) => {
+      byType.set(u.type, (byType.get(u.type) ?? 0) + 1);
+      hp += u.hp;
+      maxHp += u.maxHp;
+    });
+    const comp = [...byType.entries()].map(([t, c]) => `${UNITS[t as UnitType]?.name ?? t} ×${c}`).join("・");
     const first = units[0];
     let where = "";
     if (first) {
       if (first.mode === "retreat") where = "撤退中";
       else if (first.destNode >= 0) where = `${first.mode === "hold" ? "守在" : "前往"} ${this.nodeName(first.destNode)}`;
-      else where = first.mode === "hold" ? "在路上駐守" : "前往路上";
+      else where = first.mode === "hold" ? "原地待命" : "前往路上";
     }
-    // 停在自己據點上、還沒進去的部隊：給一個直接進駐的按鈕
+    const ratio = maxHp ? hp / maxHp : 0;
+    const hpColor = ratio > 0.6 ? "#9fd48a" : ratio > 0.3 ? "#e0a83c" : "#ff8a70";
+    // 停在自己據點上、還沒進去的部隊：直接進駐（這時「到了進駐」用不到，換成它）
     const parked =
       !!first && units.every((u) => u.mode === "hold" && u.destNode === first.destNode) && first.destNode >= 0 && session.ownsNode(first.destNode);
-    const html = `<span class="gb-desc"><b>${units.length} 支</b>${isMobile() ? "" : `（${desc}）`}・${where}</span>
-      ${parked ? '<button data-g="garrison" class="on">進駐</button>' : ""}
-      <button data-g="retreat">撤退</button>
-      <button data-g="enter" class="${session.enter ? "on" : ""}">${session.enter ? "到了進駐 ✓" : "到了進駐 ✗"}</button>
-      <button data-g="close" aria-label="取消選取">✕</button>
-      ${isMobile() ? "" : '<span class="gb-tip">拖曳部隊或點地圖上的目的地來調度・R 撤退</span>'}`;
-    if (bar.dataset.html !== html) {
-      bar.dataset.html = html;
-      bar.innerHTML = html;
+    // 按鈕只建一次，之後只改文字和狀態：重畫按鈕會讓剛好按下去的那一下失效
+    if (!bar.querySelector(".gb-info")) {
+      const hk = (k: string) => (isMobile() ? "" : `<kbd>${k}</kbd>`);
+      bar.innerHTML = `<div class="gb-info">
+          <span class="gb-title"><b data-gb-n></b><span class="gb-comp" data-gb-comp></span></span>
+          <span class="gb-sub"><span class="gb-hp"><i data-gb-hp></i></span><span data-gb-where></span></span>
+        </div>
+        <button data-g="garrison" class="on">${ICON_FORT}進駐</button>
+        <button data-g="halt">${ICON_STOP}停下${hk("S")}</button>
+        <button data-g="retreat">${ICON_BACK}撤退${hk("R")}</button>
+        <button data-g="enter"><span data-gb-check>${ICON_CHECK}</span><span data-gb-enter></span>${hk("E")}</button>
+        <button data-g="close" class="gb-x" aria-label="取消選取">${ICON_X}</button>`;
     }
+    const q = <T extends HTMLElement>(sel: string) => bar.querySelector<T>(sel)!;
+    setText(q("[data-gb-n]"), `${units.length} 支`);
+    setText(q("[data-gb-comp]"), comp);
+    setText(q("[data-gb-where]"), `${Math.round(ratio * 100)}%・${where}`);
+    const hpBar = q("[data-gb-hp]");
+    hpBar.style.width = `${Math.round(ratio * 100)}%`;
+    hpBar.style.background = hpColor;
+    q("[data-g='garrison']").classList.toggle("hidden", !parked);
+    q<HTMLButtonElement>("[data-g='halt']").disabled = first?.mode === "hold" && first.destNode < 0;
+    q<HTMLButtonElement>("[data-g='retreat']").disabled = first?.mode === "retreat";
+    const enter = q("[data-g='enter']");
+    enter.classList.toggle("hidden", parked);
+    enter.classList.toggle("on", session.enter);
+    enter.setAttribute("aria-pressed", String(session.enter));
+    q("[data-gb-check]").classList.toggle("hidden", !session.enter);
+    setText(q("[data-gb-enter]"), session.enter ? "到了進駐" : "到了進駐 ✗");
     bar.classList.remove("hidden");
   }
 
@@ -726,6 +757,7 @@ export class Hud {
     if (!el) return;
     const ids = session.selectedUnits;
     if (el.dataset.g === "retreat") this.retreat();
+    else if (el.dataset.g === "halt") this.halt();
     else if (el.dataset.g === "garrison") {
       const first = session.state!.units.get(ids[0]);
       if (first && first.destNode >= 0) {
@@ -746,6 +778,12 @@ export class Hud {
       bus.emit("unitsSelected", []);
     }
   };
+
+  private halt() {
+    if (!session.selectedUnits.length) return;
+    session.send("halt", { units: session.selectedUnits });
+    play("click", 0.6);
+  }
 
   private retreat() {
     if (!session.selectedUnits.length) return;
@@ -822,6 +860,7 @@ export class Hud {
       return this.cycleNode(e.shiftKey ? -1 : 1);
     }
     if (k === "R") return this.retreat();
+    if (k === "S") return this.halt();
     if (k === "E") {
       session.enter = !session.enter;
       return;
