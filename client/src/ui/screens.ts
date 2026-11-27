@@ -12,6 +12,7 @@ import {
   type Faction,
   type MapDef,
 } from "@frontline/shared";
+import { isMobile } from "../device";
 import { play } from "../game/sound";
 import { session } from "../session";
 import type { PlayerState } from "../types";
@@ -98,32 +99,45 @@ export function renderLobby() {
   const isHost = s.hostId === session.myId;
   $("lobby-code").textContent = room.roomId;
 
+  const count = s.players.size;
+  const choice = s.mapChoice || "random";
+  const chosen = MAPS.find((m) => m.id === choice);
+  const cap = chosen ? chosen.slots : MAX_PLAYERS; // 這張地圖最多幾方
   const byFaction = new Map<number, PlayerState>();
   s.players.forEach((p) => byFaction.set(p.faction, p));
   const slots = FACTIONS.map((f, i) => {
     const p = byFaction.get(i);
+    const style = `style="--fc:${f.css};--fl:${f.light}"`;
     if (!p) {
+      // 地圖已經坐滿：空位上鎖，寫清楚這張圖最多幾人
+      if (count >= cap) {
+        return `<div class="slot empty locked" ${style}>
+          <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="11" width="14" height="10" rx="1"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          <p class="fname">${f.name}</p>
+          <p class="slot-note">${chosen ? `${chosen.name}<br>最多 ${cap} 人` : `最多 ${cap} 人`}</p>
+        </div>`;
+      }
       const actions = [
-        isHost ? `<button class="btn small" data-act="bot" data-f="${i}">加入電腦</button>` : "",
-        me ? `<button class="btn small" data-act="color" data-f="${i}">換成這隊</button>` : "",
+        isHost ? `<button class="slot-btn primary" data-act="bot" data-f="${i}">加入電腦</button>` : "",
+        me ? `<button class="slot-btn" data-act="color" data-f="${i}">換成這隊</button>` : "",
       ].join("");
-      return `<div class="slot empty" style="--fc:${f.css}">
-        ${emblemSvg(f, 44)}
-        <p class="fname" style="color:${f.light}">${f.name}</p>
-        <p style="margin:0">空位</p>
-        <div class="slot-actions" style="margin-top:6px;justify-content:center">${actions}</div>
+      return `<div class="slot empty" ${style}>
+        ${emblemSvg(f, 40)}
+        <p class="fname">${f.name}</p>
+        <p class="slot-note">空位，等朋友加入</p>
+        <div class="slot-actions">${actions}</div>
       </div>`;
     }
     const tags = [
       p.id === s.hostId ? '<span class="tag gold">房主</span>' : "",
       p.id === session.myId ? '<span class="tag gold">你</span>' : "",
-      p.isBot ? `<span class="tag">電腦${p.botLevel && isBotLevel(p.botLevel) && !isHost ? `・${BOT_LEVEL_DEFS[p.botLevel].name}` : ""}</span>` : "",
-      !p.connected ? '<span class="tag">重新連線中</span>' : "",
+      p.isBot ? `<span class="tag">電腦${isBotLevel(p.botLevel) && !isHost ? `・${BOT_LEVEL_DEFS[p.botLevel].name}` : ""}</span>` : "",
+      !p.connected ? '<span class="tag warn">重新連線中</span>' : "",
     ].join("");
     const canKick = isHost && p.id !== session.myId;
-    return `<div class="slot" style="--fc:${f.css}">
-      ${emblemSvg(f)}
-      <p class="fname" style="color:${f.light}">${f.name}</p>
+    return `<div class="slot${p.id === session.myId ? " me" : ""}" ${style}>
+      ${emblemSvg(f, 40)}
+      <p class="fname">${f.name}</p>
       <p class="pname">${esc(p.name)}</p>
       <div class="tags">${tags}</div>
       ${
@@ -132,7 +146,7 @@ export function renderLobby() {
             `<p class="lvl-desc">${BOT_LEVEL_DEFS[p.botLevel].short}</p>`
           : ""
       }
-      <div class="slot-actions">${canKick ? `<button class="btn small" data-act="kick" data-id="${p.id}">${p.isBot ? "移除電腦" : "請離開"}</button>` : ""}</div>
+      <div class="slot-actions">${canKick ? `<button class="slot-btn" data-act="kick" data-id="${p.id}">${p.isBot ? "移除" : "請離開"}</button>` : ""}</div>
     </div>`;
   }).join("");
   const box = $("lobby-slots");
@@ -141,17 +155,16 @@ export function renderLobby() {
     box.innerHTML = slots;
   }
 
-  const count = s.players.size;
-  renderMaps(s.mapChoice || "random", count, isHost);
+  renderMaps(choice, count, isHost);
   const start = $<HTMLButtonElement>("btn-start");
   start.classList.toggle("hidden", !isHost);
   start.disabled = count < MIN_PLAYERS;
-  const hint = isHost
-    ? count < MIN_PLAYERS
-      ? "至少要兩方才能開戰。把代碼傳給朋友，或按「加入電腦」補空位。"
-      : `目前 ${count} 方，最多 ${MAX_PLAYERS} 方。3 方以上的混戰最好玩：旁邊兩家打得越凶，你越有機會撿便宜。`
-    : "等房主開戰。可以先換一個喜歡的陣營顏色。";
-  $("lobby-hint").innerHTML = `${hint}<br><span style="color:#cfc5a8">操作：點自己的據點選它，用數字鍵或面板買兵（兵會駐紮在據點裡回血；每支兵都要養兵費，囤在據點裡越多越貴）；從據點拖到道路或別的據點就派兵，拖曳經過的據點會變成必經點。點自己的部隊可以選整隊，再拖曳或點目的地調度，R 撤退。滾輪或兩指縮放戰場、拖空地移動畫面。B 轟炸、P 空降、Z / X / C 升級、點路邊的 ＋ 蓋工事（要施工，工兵在旁邊會比較快）。佔下的堡壘可以改建成砲台、兵營、補給站、防空要塞或野戰醫院。每隔一陣子會發生隨機事件。攻破堡壘後派兵在旁邊站 3 秒就能佔領（附近還有敵軍時會暫停）；堡壘最多的人會被懸賞。</span>`;
+  $("lobby-wait").classList.toggle("hidden", isHost);
+  const over = count > cap;
+  const status = count < MIN_PLAYERS ? "至少要兩方才能開戰" : over ? `${count} 方，這張地圖最多 ${cap} 方` : `${count} / ${cap} 人${isHost ? "・你是房主" : ""}`;
+  const hint = $("lobby-hint");
+  hint.textContent = status;
+  hint.classList.toggle("warn", over || count < MIN_PLAYERS);
 }
 
 const previews = new Map<string, string>();
@@ -184,27 +197,33 @@ function mapPreview(def: MapDef) {
   return svg;
 }
 
+/** 地圖：一次顯示一張大縮圖，左右切換（房主才能換），下面的點也能直接選 */
+const MAP_IDS = ["random", ...MAPS.map((m) => m.id)];
+
 function renderMaps(choice: string, count: number, isHost: boolean) {
-  const cards = [
-    `<button class="map-card${choice === "random" ? " on" : ""}" data-map="random"${isHost ? "" : " disabled"}>
-      <div class="map-thumb random"><span>?</span></div>
-      <p class="map-name">隨機</p>
-      <p class="map-desc">從符合人數的地圖裡抽一張</p>
-    </button>`,
-    ...MAPS.map((m) => {
-      const fits = count <= m.slots;
-      const range = m.minPlayers === m.slots ? `${m.slots} 人` : `${m.minPlayers}–${m.slots} 人`;
-      return `<button class="map-card${choice === m.id ? " on" : ""}${fits ? "" : " nofit"}" data-map="${m.id}"${isHost ? "" : " disabled"}>
-        <div class="map-thumb">${mapPreview(m)}</div>
-        <p class="map-name">${m.name} <span class="map-n">${range}</span></p>
-        <p class="map-desc">${fits ? m.desc : `目前 ${count} 方，這張最多 ${m.slots} 方；開戰時會改成隨機`}</p>
-      </button>`;
-    }),
-  ].join("");
+  const m = MAPS.find((x) => x.id === choice);
+  const idx = Math.max(0, MAP_IDS.indexOf(choice));
+  const range = m ? (m.minPlayers === m.slots ? `${m.slots} 人` : `${m.minPlayers}–${m.slots} 人`) : "依人數";
+  const fits = !m || count <= m.slots;
+  const thumb = m ? `<div class="map-thumb">${mapPreview(m)}</div>` : '<div class="map-thumb random"><span>?</span></div>';
+  const arrows = isHost
+    ? `<button class="map-arrow prev" data-map="${MAP_IDS[(idx - 1 + MAP_IDS.length) % MAP_IDS.length]}" aria-label="上一張地圖"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+       <button class="map-arrow next" data-map="${MAP_IDS[(idx + 1) % MAP_IDS.length]}" aria-label="下一張地圖"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>`
+    : "";
+  const dots = MAP_IDS.map((id) => {
+    const name = id === "random" ? "隨機" : (MAPS.find((x) => x.id === id)?.name ?? id);
+    return `<button class="map-dot${id === choice ? " on" : ""}" data-map="${id}" aria-label="${name}" aria-pressed="${id === choice}"${isHost ? "" : " disabled"}><i></i></button>`;
+  }).join("");
+  const html = `<div class="map-view">${thumb}${arrows}</div>
+    <div class="map-info">
+      <div class="map-title"><span class="map-name">${m ? m.name : "隨機地圖"}</span><span class="map-dots">${dots}</span></div>
+      <p class="map-desc${fits ? "" : " warn"}">${m ? (fits ? m.desc : `目前 ${count} 方，這張最多 ${m.slots} 方；開戰時會改成隨機`) : "從符合人數的地圖裡抽一張"}</p>
+      <p class="map-n">${range}・10 分鐘${isHost ? "" : "・房主選圖"}</p>
+    </div>`;
   const box = $("lobby-maps");
-  if (box.dataset.html !== cards) {
-    box.dataset.html = cards;
-    box.innerHTML = cards;
+  if (box.dataset.html !== html) {
+    box.dataset.html = html;
+    box.innerHTML = html;
   }
 }
 
@@ -234,12 +253,22 @@ export function bindLobbyActions() {
   $("btn-copy").addEventListener("click", async () => {
     const code = session.room?.roomId ?? "";
     const link = `${location.origin}${location.pathname}?room=${code}`;
+    const label = $("btn-copy").querySelector("span")!;
+    const nav = navigator as Navigator & { share?: (d: { title?: string; text?: string; url?: string }) => Promise<void> };
+    if (nav.share && isMobile()) {
+      try {
+        await nav.share({ title: "前線 Frontline", text: `來《前線》跟我打一場！房間代碼 ${code}`, url: link });
+        return;
+      } catch {
+        // 取消分享就算了，改成複製
+      }
+    }
     try {
       await navigator.clipboard.writeText(link);
-      $("btn-copy").textContent = "已複製！";
+      label.textContent = "已複製連結";
     } catch {
-      $("btn-copy").textContent = link;
+      label.textContent = link;
     }
-    setTimeout(() => ($("btn-copy").textContent = "複製邀請連結"), 2000);
+    setTimeout(() => (label.textContent = "邀請朋友"), 2000);
   });
 }

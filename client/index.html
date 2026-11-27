@@ -73,27 +73,24 @@
     <!-- 大廳 -->
     <section id="screen-lobby" class="screen hidden">
       <div class="lobby">
-        <header class="lobby-head">
-          <div>
-            <p class="eyebrow">作戰室</p>
-            <h2>等待部隊集結</h2>
-          </div>
+        <header class="lobby-top">
+          <button id="btn-leave" class="icon-btn" aria-label="離開作戰室"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <h2>作戰室</h2>
           <div class="code-box">
             <span>房間代碼</span>
             <strong id="lobby-code">----</strong>
-            <button id="btn-copy" class="btn small">複製邀請連結</button>
           </div>
+          <button id="btn-copy" class="invite-btn"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg><span>邀請朋友</span></button>
+          <p id="lobby-hint" class="lobby-status"></p>
         </header>
-        <div id="lobby-slots" class="slots"></div>
-        <div class="map-pick">
-          <p class="eyebrow">戰場</p>
-          <div id="lobby-maps" class="maps"></div>
+        <div class="lobby-body">
+          <div id="lobby-slots" class="slots"></div>
+          <aside class="lobby-side">
+            <div id="lobby-maps" class="map-box"></div>
+            <button id="btn-start" class="start-btn"><span>開始作戰</span><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+            <p id="lobby-wait" class="lobby-wait hidden">等房主開始作戰…</p>
+          </aside>
         </div>
-        <p class="lobby-hint" id="lobby-hint"></p>
-        <footer class="lobby-foot">
-          <button id="btn-leave" class="btn">離開</button>
-          <button id="btn-start" class="btn primary big">開戰！</button>
-        </footer>
       </div>
     </section>
 
