@@ -72,6 +72,7 @@ interface Drag {
   active: boolean; // 拖超過門檻才算拖曳（不然是點一下）
   via: number[];
   dest: Dest | null;
+  pid: number; // 哪一根手指（Phaser pointer id）
 }
 
 const MIN_ZOOM = 1;
@@ -193,7 +194,8 @@ export class BattleScene extends Phaser.Scene {
       .setDepth(DEPTH.overlay + 1)
       .setVisible(false);
 
-    this.input.addPointer(2);
+    // 多留幾個觸控點：手指放在兩側面板上時，地圖上還能雙指縮放
+    this.input.addPointer(3);
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => this.onPointerDown(p));
     this.input.on("pointermove", (p: Phaser.Input.Pointer) => this.onPointerMove(p));
     this.input.on("pointerup", (p: Phaser.Input.Pointer) => this.onPointerUp(p));
@@ -228,12 +230,24 @@ export class BattleScene extends Phaser.Scene {
       bus.on("newBattle", () => (this.mapId = "")),
       bus.on("cancelDrag", () => this.endDrag()),
     );
+    // 手指放開的事件有時候會遺失（例如按著的面板按鈕剛好被重畫、切到背景），
+    // Phaser 就會以為那根手指一直按著，之後每次點地圖都被當成雙指縮放，整個點不動。
+    // 每次有新的手指放下，用瀏覽器給的「目前所有手指」清掉已經不存在的觸控點。
+    const syncTouches = (e: TouchEvent) => this.syncTouches(e.touches);
+    const releaseAll = () => this.releaseTouches();
+    const onVisibility = () => document.hidden && releaseAll();
+    window.addEventListener("touchstart", syncTouches, { capture: true, passive: true });
+    window.addEventListener("blur", releaseAll);
+    document.addEventListener("visibilitychange", onVisibility);
     // 畫面重建時（destroy）也要把事件拿掉，不然舊的場景還會收到事件
     let cleaned = false;
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
       this.offs.forEach((f) => f());
+      window.removeEventListener("touchstart", syncTouches, { capture: true });
+      window.removeEventListener("blur", releaseAll);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
     this.events.once("shutdown", cleanup);
     this.events.once("destroy", cleanup);
@@ -1648,8 +1662,45 @@ export class BattleScene extends Phaser.Scene {
     return Math.max(objR, minCss / Math.max(0.05, this.cssPerWorld()));
   }
 
+  /** 在地圖上按著的手指（在兩側面板上按著的不算） */
   private touches() {
-    return [this.input.pointer1, this.input.pointer2].filter((pt): pt is Phaser.Input.Pointer => !!pt && pt.isDown);
+    const canvas = this.game.canvas;
+    return this.input.manager.pointers.filter((pt, i) => i > 0 && pt.isDown && pt.downElement === canvas);
+  }
+
+  /** 把瀏覽器已經沒有的觸控點當成放開（live = 瀏覽器目前所有按著的手指） */
+  private syncTouches(live: TouchList) {
+    const ids = new Set<number>();
+    for (let i = 0; i < live.length; i++) ids.add(live[i].identifier);
+    let lost = false;
+    this.input.manager.pointers.forEach((pt, i) => {
+      if (i === 0 || !pt.active || ids.has(pt.identifier)) return;
+      this.forceUp(pt);
+      lost = true;
+    });
+    if (lost) this.resetGesture();
+  }
+
+  /** 切到背景、失去焦點：所有觸控點都當成放開 */
+  private releaseTouches() {
+    this.input.manager.pointers.forEach((pt, i) => {
+      if (i > 0 && (pt.active || pt.isDown)) this.forceUp(pt);
+    });
+    this.resetGesture();
+  }
+
+  private forceUp(pt: Phaser.Input.Pointer) {
+    pt.isDown = false;
+    pt.active = false;
+    pt.primaryDown = false;
+    pt.buttons = 0;
+    if (this.drag && this.drag.pid === pt.id) this.endDrag();
+  }
+
+  private resetGesture() {
+    if (this.touches().length >= 2) return;
+    this.gesture = false;
+    this.pinch = null;
   }
 
   private updatePinch() {
@@ -1751,7 +1802,7 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
     const w = this.toWorld(p.x, p.y);
-    const base = { node: -1, units: [] as string[], slot: -1, startX: p.x, startY: p.y, lastX: p.x, lastY: p.y, active: false, via: [] as number[], dest: null };
+    const base = { node: -1, units: [] as string[], slot: -1, startX: p.x, startY: p.y, lastX: p.x, lastY: p.y, active: false, via: [] as number[], dest: null, pid: p.id };
     const playing = session.state?.phase === "playing" && !!session.me()?.alive;
     if (!playing) {
       this.drag = { kind: "pan", ...base };
@@ -1784,7 +1835,8 @@ export class BattleScene extends Phaser.Scene {
     const slot = hasSel ? null : this.hitSlot(w.x, w.y);
     // 重疊時選最靠近中心的那個
     const cands: { kind: Drag["kind"]; score: number }[] = [];
-    if (unit) cands.push({ kind: "order", score: unit.score });
+    // 按在已經選取的部隊上：一定是要拖它們
+    if (unit) cands.push({ kind: "order", score: unit.score * (session.selectedUnits.includes(unit.unit.id) ? 0.4 : 1) });
     if (ownNode) cands.push({ kind: "dispatch", score: ownNode.score });
     if (slot) cands.push({ kind: "slot", score: slot.score * 1.1 });
     cands.sort((a, b) => a.score - b.score);
@@ -1793,12 +1845,35 @@ export class BattleScene extends Phaser.Scene {
       if (!session.selectedUnits.includes(unit.unit.id)) this.selectGroup(unit.unit);
       this.drag = { ...base, kind: "order", units: [...session.selectedUnits] };
     } else if (pick === "dispatch" && ownNode) {
-      this.drag = { ...base, kind: "dispatch", node: ownNode.index };
+      // 據點裡沒有駐軍、但自己的部隊站在據點上（例如佔領後沒進駐）：
+      // 按這裡就是選那些部隊，拖出去就是調度它們，不然永遠點不到被堡壘蓋住的兵
+      const onTop = this.unitsOnNode(ownNode.index);
+      const empty = session.garrison(ownNode.index).length === 0;
+      const selOnTop = session.selectedUnits.every((id) => onTop.includes(id));
+      if (onTop.length && empty && selOnTop) {
+        this.drag = { ...base, kind: "order", node: ownNode.index, units: onTop };
+      } else {
+        this.drag = { ...base, kind: "dispatch", node: ownNode.index };
+      }
     } else if (pick === "slot" && slot) {
       this.drag = { ...base, kind: "slot", slot: slot.index };
     } else {
       this.drag = { ...base, kind: "pan" };
     }
+  }
+
+  /** 站在自己據點上（被堡壘圖示蓋住）的自己部隊 */
+  private unitsOnNode(node: number): string[] {
+    const s = session.state!;
+    const nd = this.map.nodes[node];
+    const r = this.nodeR(node);
+    const ids: string[] = [];
+    this.units.forEach((v, id) => {
+      const u = s.units.get(id);
+      if (!u || u.owner !== session.myId || u.inNode >= 0 || u.landT > s.time || u.mode === "retreat") return;
+      if (Math.hypot(v.wx - nd.x, v.wy - nd.y) <= r) ids.push(id);
+    });
+    return ids;
   }
 
   private onPointerMove(p: Phaser.Input.Pointer) {
@@ -1816,7 +1891,7 @@ export class BattleScene extends Phaser.Scene {
     }
     this.crosshair.setVisible(false);
     const d = this.drag;
-    if (!d || !p.isDown) return;
+    if (!d || !p.isDown || d.pid !== p.id) return;
     if (!d.active) {
       const rect = this.game.canvas.getBoundingClientRect();
       const cssPerPx = rect.width / this.scale.width;
@@ -1841,6 +1916,8 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private onPointerUp(p: Phaser.Input.Pointer) {
+    // 在兩側面板上按下、放開的手指不關地圖的事
+    if (p.downElement !== this.game.canvas) return;
     if (this.gesture) {
       // 雙指手勢：全部手指都放開才結束，期間不算點擊
       this.pinch = null;
@@ -1849,6 +1926,7 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
     const d = this.drag;
+    if (d && d.pid !== p.id) return; // 別根手指放開，不影響正在拖的這根
     this.drag = null;
     this.preview.clear();
     this.previewText.setVisible(false);
@@ -1859,6 +1937,11 @@ export class BattleScene extends Phaser.Scene {
       if (d.kind === "dispatch") {
         if (session.selectedUnits.length) this.sendOrder(session.selectedUnits, [], { node: d.node });
         else this.selectNode(d.node);
+      } else if (d.kind === "order" && d.node >= 0) {
+        // 點站在據點上的兵：選據點（可以買兵），也選這些兵（下方出現指令列）
+        this.selectNode(d.node);
+        session.selectedUnits = d.units;
+        bus.emit("unitsSelected", d.units);
       } else if (d.kind === "slot") {
         const sl = this.slots[d.slot];
         if (!sl) return;

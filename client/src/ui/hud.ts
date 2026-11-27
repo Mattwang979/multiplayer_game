@@ -465,7 +465,11 @@ export class Hud {
       else if (first.destNode >= 0) where = `${first.mode === "hold" ? "守在" : "前往"} ${this.nodeName(first.destNode)}`;
       else where = first.mode === "hold" ? "在路上駐守" : "前往路上";
     }
+    // 停在自己據點上、還沒進去的部隊：給一個直接進駐的按鈕
+    const parked =
+      !!first && units.every((u) => u.mode === "hold" && u.destNode === first.destNode) && first.destNode >= 0 && session.ownsNode(first.destNode);
     const html = `<span class="gb-desc"><b>${units.length} 支</b>${isMobile() ? "" : `（${desc}）`}・${where}</span>
+      ${parked ? '<button data-g="garrison" class="on">進駐</button>' : ""}
       <button data-g="retreat">撤退</button>
       <button data-g="enter" class="${session.enter ? "on" : ""}">${session.enter ? "到了進駐 ✓" : "到了進駐 ✗"}</button>
       <button data-g="close" aria-label="取消選取">✕</button>
@@ -574,7 +578,13 @@ export class Hud {
     if (!el) return;
     const ids = session.selectedUnits;
     if (el.dataset.g === "retreat") this.retreat();
-    else if (el.dataset.g === "enter") {
+    else if (el.dataset.g === "garrison") {
+      const first = session.state!.units.get(ids[0]);
+      if (first && first.destNode >= 0) {
+        session.send("order", { units: ids, via: [], dest: { node: first.destNode }, enter: true });
+        play("click", 0.6);
+      }
+    } else if (el.dataset.g === "enter") {
       session.enter = !session.enter;
       // 已經在往某個據點走的部隊：用新的設定再下一次同樣的指令
       const s = session.state!;
