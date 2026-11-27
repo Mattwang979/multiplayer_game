@@ -7,6 +7,7 @@ import { BattleScene } from "./game/BattleScene";
 import { initAudio, isMusicOn, isMuted, play, startMusic, stopMusic, toggleMusic, toggleMute } from "./game/sound";
 import { createRoom, errorText, forgetRoom, joinRoom, rememberRoom, tryReconnect, type GameRoom } from "./net";
 import { bus, session } from "./session";
+import { Armory } from "./ui/armory";
 import { Hud } from "./ui/hud";
 import { bindLobbyActions, bindPracticeLevel, homeError, renderLobby, savedBotLevel, showScreen } from "./ui/screens";
 
@@ -343,6 +344,27 @@ function bindHomeTools() {
       openSettings(false);
       setBtn.focus();
     }
+  });
+  // 兵種圖鑑：第一次打開才建立
+  let armory: Armory | null = null;
+  const closeArmory = () => {
+    showScreen("home");
+    $("btn-armory").focus();
+  };
+  $("btn-armory").addEventListener("click", () => {
+    play("click");
+    openSettings(false);
+    armory ??= new Armory();
+    armory.open();
+    showScreen("armory");
+    $("btn-armory-back").focus();
+  });
+  $("btn-armory-back").addEventListener("click", () => {
+    play("click");
+    closeArmory();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("screen-armory").classList.contains("hidden")) closeArmory();
   });
   // 已經是全螢幕（或從主畫面開）就把按鈕改成「退出全螢幕」或藏起來
   const fsBtn = $("btn-fullscreen");

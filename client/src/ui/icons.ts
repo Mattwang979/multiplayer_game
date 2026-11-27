@@ -1,7 +1,7 @@
 // 介面用的線條圖示（兵種、空軍、陣營徽章），跟設計稿同一套
-import type { UnitType } from "@frontline/shared";
+import type { BuildKind, UnitType } from "@frontline/shared";
 
-const UNIT_PATHS: Record<UnitType | "bomber" | "transport", string> = {
+const UNIT_PATHS: Record<UnitType | "bomber" | "transport" | BuildKind, string> = {
   rifle: '<path d="M6 19a10 10 0 0 1 20 0z"/><path d="M3 19h26"/><path d="M11 24l14-9"/>',
   mg: '<path d="M4 14h20"/><path d="M24 12v4M26 14h3"/><rect x="9" y="11" width="8" height="6" rx="1"/><path d="M13 17l-5 10M13 17l5 10"/>',
   sniper: '<circle cx="16" cy="16" r="9"/><circle cx="16" cy="16" r="2"/><path d="M16 3v6M16 23v6M3 16h6M23 16h6"/>',
@@ -16,6 +16,9 @@ const UNIT_PATHS: Record<UnitType | "bomber" | "transport", string> = {
   para: '<path d="M4 14a12 10 0 0 1 24 0z"/><path d="M4 14l12 12 12-12M16 14v12"/><circle cx="16" cy="28" r="2"/>',
   bomber: '<path d="M16 3v24"/><path d="M3 15l13-3 13 3"/><path d="M10 27h12"/><path d="M8 13v4M24 13v4"/>',
   transport: '<path d="M4 14a12 10 0 0 1 24 0z"/><path d="M4 14l12 12 12-12M16 14v12"/><circle cx="16" cy="28" r="2"/>',
+  bunker: '<path d="M5 25L8 13Q16 8 24 13L27 25z"/><path d="M11 18h10"/><path d="M2 25h28"/>',
+  atnest: '<path d="M10 14l4-1v7l-4 1z"/><path d="M14 16h15"/><path d="M3 26a3.5 3 0 0 1 7 0a3.5 3 0 0 1 7 0a3.5 3 0 0 1 7 0a3.5 3 0 0 1 7 0"/>',
+  aa: '<path d="M16 21L27 6"/><path d="M8 26a8 6 0 0 1 16 0"/><path d="M3 26h26"/>',
 };
 
 /** 兵種／空軍圖示（顏色跟著文字） */

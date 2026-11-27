@@ -82,8 +82,8 @@ export function bindPracticeLevel() {
   });
 }
 
-export function showScreen(id: "home" | "lobby" | "game") {
-  for (const s of ["home", "lobby", "game"]) $(`screen-${s}`).classList.toggle("hidden", s !== id);
+export function showScreen(id: "home" | "lobby" | "game" | "armory") {
+  for (const s of ["home", "lobby", "game", "armory"]) $(`screen-${s}`).classList.toggle("hidden", s !== id);
 }
 
 export function homeError(text: string) {
