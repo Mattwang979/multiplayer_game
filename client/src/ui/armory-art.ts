@@ -7,7 +7,6 @@ const OL = "#20241a"; // 描邊
 const DARK = "#2c3121";
 const METAL = "#2a2e22";
 const SKIN = "#b99c76";
-const TROUSERS = "#3d4430";
 
 const DEFS = `<defs>
   <linearGradient id="aa-body" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7a8552"/><stop offset="1" stop-color="#3f4630"/></linearGradient>
@@ -19,47 +18,117 @@ const DEFS = `<defs>
 const shadow = (cx = 130, rx = 100) => `<ellipse cx="${cx}" cy="74" rx="${rx}" ry="4.5" fill="#000" opacity=".35"/>`;
 const s = (w = 1.5) => `stroke="${OL}" stroke-width="${w}" stroke-linejoin="round"`;
 
-/** 頭和鋼盔（中心 x，頭頂附近 y） */
-function head(x: number, y: number, helmet = "#5d6842", mark = "") {
-  return `<circle cx="${x + 1}" cy="${y}" r="4.6" fill="${SKIN}" ${s(1.2)}/>
-    <path d="M${x - 6.5} ${y - 1} Q${x + 0.5} ${y - 12} ${x + 8} ${y - 1}Z" fill="${helmet}" ${s()}/>
-    <path d="M${x - 8} ${y - 1}H${x + 9.5}" stroke="${OL}" stroke-width="2" stroke-linecap="round"/>${mark}`;
+type P = [number, number];
+/** 一個人的關節位置（面向右）：b = 後面那隻手腳，f = 前面那隻 */
+interface Pose {
+  hip: P; neck: P; head: P; sh: P;
+  bk: P; bf: P; fk: P; ff: P; // 膝、腳
+  be: P; bh: P; fe: P; fh: P; // 手肘、手
+  boots?: [P, P][]; // 鞋子的方向，預設平放在地上
+  bare?: boolean; // 沒戴鋼盔（傷兵）
+}
+const UNIFORM = "#6b7650";
+const UNIFORM_BACK = "#4f5939";
+const LEG = "#454d34";
+const LEG_BACK = "#353c28";
+const HELMET = "#5d6842";
+
+const path = (pts: P[]) => "M" + pts.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join("L");
+/** 一段有描邊的圓頭肢體：先畫粗一點的深色，再畫顏色 */
+const limb = (pts: P[], w: number, color: string) =>
+  `<path d="${path(pts)}" stroke="${OL}" stroke-width="${w + 2.6}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>` +
+  `<path d="${path(pts)}" stroke="${color}" stroke-width="${w}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+
+function helmet([hx, hy]: P, color = HELMET, mark = "") {
+  return `<path d="M${hx - 5.8} ${hy - 0.6} Q${hx - 0.2} ${hy - 10.8} ${hx + 5.8} ${hy - 0.6}Z" fill="${color}" ${s(1.4)}/>
+    <path d="M${hx - 7} ${hy - 0.4}H${hx + 7.2}" stroke="${OL}" stroke-width="2" stroke-linecap="round"/>${mark}`;
 }
 
-/** 站著的士兵，面向右；x 是腳的中心 */
-function standing(x: number, gear: "rifle" | "none" | "flame" | "satchel" = "rifle", pack = true) {
-  const arm =
-    gear === "rifle" ? `<path d="M${x - 4} 41 L${x + 26} 33" stroke="#2a2418" stroke-width="3" stroke-linecap="round"/>
-      <path d="M${x + 1} 34 L${x + 10} 39 L${x + 17} 36" stroke="#55603d" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`
-    : gear === "flame" ? `<path d="M${x + 2} 42 L${x + 30} 39" stroke="${METAL}" stroke-width="3.4" stroke-linecap="round"/>
-      <path d="M${x - 8} 40 Q${x - 4} 50 ${x + 8} 43" stroke="${METAL}" stroke-width="2" fill="none"/>
-      <path d="M${x + 1} 34 L${x + 8} 41 L${x + 16} 40" stroke="#55603d" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`
-    : gear === "satchel" ? `<path d="M${x + 1} 34 L${x + 8} 42 L${x + 12} 48" stroke="#55603d" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-      <rect x="${x + 6}" y="47" width="13" height="9" rx="1.5" fill="#6b5a3a" ${s(1.2)}/><path d="M${x + 12} 47 v-3" stroke="${OL}" stroke-width="1.4"/>`
-    : `<path d="M${x + 1} 34 L${x + 4} 44" stroke="#55603d" stroke-width="4" stroke-linecap="round"/>`;
-  const back =
-    gear === "flame" ? `<rect x="${x - 15}" y="29" width="6" height="21" rx="3" fill="url(#aa-metal)" ${s(1.2)}/><rect x="${x - 10}" y="29" width="6" height="21" rx="3" fill="url(#aa-metal)" ${s(1.2)}/>`
-    : pack ? `<rect x="${x - 11}" y="32" width="5.5" height="13" rx="1.5" fill="#4b5236" ${s(1.2)}/>` : "";
-  return `<g>${back}
-    <path d="M${x - 5} 50 L${x - 8} 72 L${x - 3} 72 L${x} 57 L${x + 3} 72 L${x + 8} 72 L${x + 5} 50Z" fill="${TROUSERS}" ${s()}/>
-    <path d="M${x - 9} 70h7v3h-7zM${x + 2} 70h8v3h-8z" fill="#1c1e16"/>
-    <path d="M${x - 6} 31 L${x + 6} 31 L${x + 7} 51 L${x - 6} 51Z" fill="url(#aa-body)" ${s()}/>
-    <rect x="${x - 6.5}" y="45" width="13.5" height="3" fill="${DARK}"/>
-    ${head(x, 26)}${arm}</g>`;
-}
-
-/** 單膝跪著的士兵（砲組、機槍手），面向右 */
-function kneeling(x: number, arms: "forward" | "down" = "forward", helmet = "#5d6842", mark = "") {
-  const arm =
-    arms === "forward" ? `<path d="M${x + 1} 46 L${x + 10} 51 L${x + 19} 50" stroke="#55603d" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`
-    : `<path d="M${x + 1} 46 L${x + 8} 55 L${x + 16} 58" stroke="#55603d" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+/**
+ * 依關節畫人：後腳 → 後手 → 背包 → 身體 → 前腳 → 手上的東西 → 頭 → 前手。
+ * gear 畫在身體後面（背包、油桶），held 畫在前手底下（槍、箱子）
+ */
+function person(p: Pose, opts: { gear?: string; held?: string; helmetColor?: string; mark?: string; armband?: boolean } = {}) {
+  const boots = p.boots ?? [
+    [p.bf, [p.bf[0] + 4.5, p.bf[1]]],
+    [p.ff, [p.ff[0] + 4.5, p.ff[1]]],
+  ];
+  // 腰帶：身體從臀部往上兩成的位置
+  const bx = p.hip[0] + (p.neck[0] - p.hip[0]) * 0.22;
+  const by = p.hip[1] + (p.neck[1] - p.hip[1]) * 0.22;
+  const dx = p.neck[0] - p.hip[0];
+  const dy = p.neck[1] - p.hip[1];
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = (-dy / len) * 6;
+  const ny = (dx / len) * 6;
+  const [hx, hy] = p.head;
   return `<g>
-    <path d="M${x - 5} 61 L${x - 12} 72 L${x - 4} 72 L${x + 1} 64Z" fill="${TROUSERS}" ${s()}/>
-    <path d="M${x + 1} 59 L${x + 13} 60 L${x + 13} 72 L${x + 18} 72 L${x + 17} 57 L${x + 4} 55Z" fill="${TROUSERS}" ${s()}/>
-    <path d="M${x - 6} 43 L${x + 6} 43 L${x + 7} 62 L${x - 6} 62Z" fill="url(#aa-body)" ${s()}/>
-    <rect x="${x - 11}" y="44" width="5.5" height="12" rx="1.5" fill="#4b5236" ${s(1.2)}/>
-    ${head(x, 38, helmet, mark)}${arm}</g>`;
+    ${limb([p.hip, p.bk, p.bf], 6.2, LEG_BACK)}${limb(boots[0], 3.6, "#1c1e16")}
+    ${limb([p.sh, p.be, p.bh], 4.4, UNIFORM_BACK)}
+    ${opts.gear ?? ""}
+    ${limb([p.hip, p.neck], 11, UNIFORM)}
+    <path d="M${(bx - nx).toFixed(1)} ${(by - ny).toFixed(1)}L${(bx + nx).toFixed(1)} ${(by + ny).toFixed(1)}" stroke="${DARK}" stroke-width="2"/>
+    ${limb([p.hip, p.fk, p.ff], 6.6, LEG)}${limb(boots[1], 3.8, "#1c1e16")}
+    ${opts.held ?? ""}
+    <circle cx="${hx}" cy="${hy + 0.8}" r="4.3" fill="${SKIN}" ${s(1.3)}/>
+    ${p.bare ? `<path d="M${hx - 4} ${hy - 1}h8" stroke="#e8e4d6" stroke-width="2.4"/>` : helmet(p.head, opts.helmetColor, opts.mark)}
+    ${limb([p.sh, p.fe, p.fh], 4.6, UNIFORM)}
+    ${opts.armband ? `<circle cx="${p.fe[0]}" cy="${p.fe[1]}" r="2.6" fill="#f4f1e6"/><path d="M${p.fe[0]} ${p.fe[1] - 1.6}v3.2M${p.fe[0] - 1.6} ${p.fe[1]}h3.2" stroke="#c8352b" stroke-width="1.1"/>` : ""}
+    <circle cx="${p.fh[0]}" cy="${p.fh[1]}" r="1.9" fill="${SKIN}" ${s(1)}/>
+  </g>`;
 }
+
+/** 平移一個姿勢 */
+const at = (x: number, y: number, pose: Pose): Pose => {
+  const m = (q: P): P => [q[0] + x, q[1] + y];
+  return {
+    ...pose,
+    hip: m(pose.hip), neck: m(pose.neck), head: m(pose.head), sh: m(pose.sh),
+    bk: m(pose.bk), bf: m(pose.bf), fk: m(pose.fk), ff: m(pose.ff),
+    be: m(pose.be), bh: m(pose.bh), fe: m(pose.fe), fh: m(pose.fh),
+    boots: pose.boots?.map(([a, b]) => [m(a), m(b)] as [P, P]),
+  };
+};
+
+/** 一把步槍：穿過兩隻手，往後是槍托、往前是槍管 */
+function rifleThrough(a: P, b: P, back = 8, front = 12) {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const l = Math.hypot(dx, dy) || 1;
+  const ux = dx / l;
+  const uy = dy / l;
+  const stock: P = [a[0] - ux * back, a[1] - uy * back];
+  const mid: P = [b[0] + ux * 3, b[1] + uy * 3];
+  const muzzle: P = [b[0] + ux * front, b[1] + uy * front];
+  return limb([stock, mid], 2.6, "#5a4128") + limb([mid, muzzle], 1.4, METAL);
+}
+
+/** 背包 */
+const pack = (p: Pose) => `<rect x="${p.neck[0] - 10.5}" y="${p.neck[1] + 1}" width="6.5" height="12" rx="2" fill="#4b5236" ${s(1.2)}/>`;
+
+// ---------- 姿勢（腳在 y = 72，臀部約在 x = 0） ----------
+const STAND: Pose = {
+  hip: [0, 48], neck: [1, 31], head: [2.5, 25], sh: [1.5, 33],
+  bk: [-3, 60], bf: [-6, 71.5], fk: [4.5, 60], ff: [6.5, 71.5],
+  be: [-1, 41], bh: [6, 43], fe: [8, 41], fh: [15, 38],
+};
+const AIM: Pose = {
+  ...STAND,
+  head: [3.5, 25], bk: [-4, 60], bf: [-8, 71.5], fk: [5, 60], ff: [8, 71.5],
+  be: [-2, 38], bh: [5, 33], fe: [10, 37], fh: [15, 32],
+};
+const ADVANCE: Pose = {
+  hip: [0, 48], neck: [4.5, 31.5], head: [7, 25.5], sh: [5, 33.5],
+  bk: [-6, 59], bf: [-12, 71], fk: [7.5, 58.5], ff: [8.5, 71.5],
+  be: [1, 41], bh: [8, 44], fe: [11.5, 42], fh: [16, 37],
+  boots: [[[-12, 71], [-8, 72]], [[8.5, 71.5], [13, 71.5]]],
+};
+const KNEEL: Pose = {
+  hip: [0, 58], neck: [2.5, 40.5], head: [4, 34.5], sh: [3, 42.5],
+  bk: [-7, 70.5], bf: [-17, 71.5], fk: [9, 56.5], ff: [10, 71.5],
+  be: [5, 51], bh: [13, 49], fe: [10, 50], fh: [18, 48],
+  boots: [[[-17, 71.5], [-20, 70]], [[10, 71.5], [14.5, 71.5]]],
+};
 
 /** 一排沙包 */
 function sandbags(x0: number, x1: number, y: number, rows = 2) {
@@ -81,8 +150,44 @@ function spokeWheel(cx: number, cy: number, r: number) {
   return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#3a3f2c" ${s(2)}/>${spokes}<circle cx="${cx}" cy="${cy}" r="${r * 0.28}" fill="${DARK}" ${s(1.2)}/>`;
 }
 
-const MEDIC_MARK = (x: number, y: number) =>
-  `<circle cx="${x + 1}" cy="${y - 5}" r="3.2" fill="#f4f1e6"/><path d="M${x + 1} ${y - 7.2}v4.4M${x - 1.2} ${y - 5}h4.4" stroke="#c8352b" stroke-width="1.6"/>`;
+/** 畫在 x 的人，k 倍大（以腳底 y = 72 為準縮放） */
+function fig(x: number, k: number, pose: Pose, o: { rifle?: [number, number]; pack?: boolean; gear?: string; held?: string; helmetColor?: string; mark?: string; armband?: boolean } = {}) {
+  const held = (o.rifle ? rifleThrough(pose.bh, pose.fh, o.rifle[0], o.rifle[1]) : "") + (o.held ?? "");
+  const gear = (o.pack ? pack(pose) : "") + (o.gear ?? "");
+  return `<g transform="translate(${x} 72) scale(${k}) translate(0 -72)">${person(pose, { ...o, held, gear })}</g>`;
+}
+
+const LOADER: Pose = { ...KNEEL, be: [6, 53], bh: [12, 60], fe: [11, 54], fh: [17, 59] };
+const PRONE: Pose = {
+  hip: [0, 65], neck: [19, 61.5], head: [25, 57], sh: [18, 62.5],
+  bk: [-9, 62.5], bf: [-19, 66], fk: [-12, 68], ff: [-25, 69.5], // 後腳彎起來，前腳伸直
+  be: [23, 69.5], bh: [29, 63.5], fe: [27, 69.5], fh: [34, 62.5],
+  boots: [[[-19, 66], [-22, 63.5]], [[-25, 69.5], [-28, 67]]],
+};
+const FLAME: Pose = {
+  hip: [0, 48], neck: [0, 31], head: [1.5, 25], sh: [0.5, 33],
+  bk: [-5, 60], bf: [-9, 71.5], fk: [6, 60], ff: [10, 71.5],
+  be: [1, 41], bh: [7, 45], fe: [9, 40], fh: [15, 43],
+};
+const CARRY: Pose = { ...STAND, be: [-1, 42], bh: [5, 40], fe: [9, 42], fh: [13, 37] };
+const ENG: Pose = { ...STAND, be: [-3, 41], bh: [-3, 50], fe: [6, 42], fh: [11, 49] };
+const MEDIC: Pose = {
+  ...KNEEL, neck: [9, 43], head: [12.5, 37.5], sh: [9, 45],
+  be: [14, 54], bh: [23, 62], fe: [18, 53], fh: [27, 63],
+};
+const SUPINE: Pose = {
+  head: [0, 64.5], neck: [5, 66.5], hip: [24, 67.5], sh: [6, 66.5],
+  fk: [33, 59], ff: [41, 70.5], bk: [34, 61], bf: [43, 71],
+  be: [8, 70], bh: [3, 70.5], fe: [13, 70.5], fh: [20, 70],
+  boots: [[[43, 71], [47, 71]], [[41, 70.5], [45, 70.5]]],
+  bare: true,
+};
+const HANG: Pose = {
+  hip: [0, 48], neck: [0, 31], head: [0.5, 25], sh: [0, 33],
+  bk: [-1.5, 60], bf: [-3, 71], fk: [1.5, 60], ff: [2.5, 71],
+  be: [-5, 26], bh: [-6, 17], fe: [5, 26], fh: [6, 17],
+  boots: [[[-3, 71], [-1, 73]], [[2.5, 71], [5, 73]]],
+};
 
 function plane(x: number, y: number, k: number, kind: "bomber" | "transport") {
   const nose =
@@ -102,37 +207,40 @@ function plane(x: number, y: number, k: number, kind: "bomber" | "transport") {
 }
 
 const ART: Record<ArmoryKind, () => string> = {
-  rifle: () => shadow(130, 80) + standing(84) + standing(126) + standing(168),
+  rifle: () =>
+    shadow(128, 84) +
+    fig(70, 1.18, AIM, { rifle: [9, 15], pack: true }) +
+    fig(124, 1.18, ADVANCE, { rifle: [8, 12], pack: true }) +
+    fig(176, 1.18, STAND, { rifle: [8, 12], pack: true }),
 
   mg: () =>
-    shadow(140, 90) +
-    `<path d="M168 56 L158 72 M168 56 L178 72 M200 57 L204 72" stroke="${METAL}" stroke-width="2.4" stroke-linecap="round"/>
-    <rect x="150" y="49" width="32" height="8" rx="1.5" fill="url(#aa-metal)" ${s()}/>
-    <rect x="182" y="51" width="38" height="4" fill="${METAL}" ${s(1)}/>
-    <path d="M188 51v4M194 51v4M200 51v4M206 51v4" stroke="#555b44" stroke-width="1.2"/>
-    <rect x="160" y="57" width="12" height="9" fill="#5a5236" ${s(1.2)}/>
-    <path d="M166 57 Q160 64 150 66" stroke="#b08a3a" stroke-width="2" fill="none"/>` +
-    kneeling(138) +
-    kneeling(96, "down") +
-    `<rect x="110" y="64" width="13" height="8" fill="#5a5236" ${s(1.2)}/>`,
+    shadow(142, 92) +
+    `<path d="M164 54 L154 72 M164 54 L174 72 M202 51 L198 72 M202 51 L208 72" stroke="${METAL}" stroke-width="2.4" stroke-linecap="round"/>
+    <rect x="144" y="46" width="34" height="8" rx="1.5" fill="url(#aa-metal)" ${s()}/>
+    <rect x="178" y="48" width="40" height="4" fill="${METAL}" ${s(1)}/>
+    <path d="M184 48v4M190 48v4M196 48v4M202 48v4M208 48v4" stroke="#555b44" stroke-width="1.2"/>
+    <rect x="158" y="54" width="12" height="8" fill="#5a5236" ${s(1.2)}/>
+    <path d="M113 59 Q132 70 160 56" stroke="#b08a3a" stroke-width="2.2" fill="none" stroke-dasharray="2 1.5"/>` +
+    fig(92, 1.12, LOADER, { held: `<rect x="9" y="56" width="13" height="8" rx="1" fill="#5a5236" ${s(1.2)}/>` }) +
+    fig(128, 1.12, KNEEL, { pack: true }),
 
   sniper: () =>
-    shadow(140, 96) +
-    `<path d="M60 72 q6 -9 10 0 M74 72 q4 -7 8 0 M220 72 q5 -8 9 0 M232 72 q4 -6 8 0" stroke="#5e6a42" stroke-width="2" fill="none"/>
-    <path d="M70 70 L80 62 L150 60 L156 70Z" fill="${TROUSERS}" ${s()}/>
-    <path d="M92 60 Q120 54 152 58 L156 68 L96 69Z" fill="url(#aa-body)" ${s()}/>
-    <path d="M64 70 l8 -3 l3 4z" fill="#1c1e16"/>
-    ${head(160, 56)}
-    <path d="M150 60 L232 56" stroke="#2a2418" stroke-width="3.2" stroke-linecap="round"/>
-    <rect x="176" y="51" width="22" height="4" rx="2" fill="${METAL}" ${s(1)}/>
-    <path d="M214 57 L210 70 M214 57 L220 70" stroke="${METAL}" stroke-width="1.8"/>
-    <path d="M158 62 L172 60" stroke="#55603d" stroke-width="4" stroke-linecap="round"/>`,
+    shadow(150, 92) +
+    `<path d="M196 72 q5 -9 9 0 M208 72 q4 -7 8 0 M84 72 q4 -6 8 0" stroke="#5e6a42" stroke-width="2" fill="none"/>` +
+    fig(118, 1.3, PRONE, {
+      rifle: [10, 30],
+      held: `${limb([[23, 60.5], [33, 58.6]], 2.8, METAL)}<path d="M50 59 L47.5 71 M50 59 L53 71" stroke="${METAL}" stroke-width="1.6"/>`,
+    }),
 
   flame: () =>
-    shadow(120, 70) +
-    `<path d="M126 38 Q160 26 196 34 Q230 30 246 40 Q228 46 206 50 Q176 56 150 48 Q134 46 126 42Z" fill="url(#aa-flame)"/>
-    <path d="M128 39 Q152 34 176 38 Q160 44 130 42Z" fill="#fff1a8" opacity=".8"/>` +
-    standing(98, "flame", false),
+    shadow(126, 76) +
+    `<path d="M127 33 Q160 20 196 28 Q230 24 246 34 Q228 40 206 44 Q176 50 150 42 Q134 40 127 36Z" fill="url(#aa-flame)"/>
+    <path d="M128 34 Q152 29 176 33 Q160 39 130 37Z" fill="#fff1a8" opacity=".8"/>` +
+    fig(90, 1.2, FLAME, {
+      gear: `<rect x="-14.5" y="29" width="6.5" height="21" rx="3.2" fill="url(#aa-metal)" ${s(1.2)}/><rect x="-9.5" y="29" width="6.5" height="21" rx="3.2" fill="url(#aa-metal)" ${s(1.2)}/>
+        <path d="M-7 50 Q-3 58 3 47" stroke="${METAL}" stroke-width="2" fill="none"/>`,
+      held: limb([[2.2, 46.2], [30.5, 39.1]], 2.8, METAL),
+    }),
 
   car: () =>
     shadow(128, 96) +
@@ -155,13 +263,13 @@ const ART: Record<ArmoryKind, () => string> = {
     <path d="M32 44 H206" stroke="#97a26c" stroke-width="1.5" opacity=".6"/>`,
 
   at: () =>
-    shadow(130, 100) +
-    `<path d="M128 58 L58 71 M128 61 L74 73" stroke="${METAL}" stroke-width="4.5" stroke-linecap="round"/>
-    <rect x="132" y="38" width="94" height="5" fill="url(#aa-metal)" ${s(1.2)}/>
-    <rect x="222" y="36" width="12" height="9" rx="1.5" fill="${DARK}" ${s(1.2)}/>
-    <path d="M118 30 L136 27 L140 58 L122 61Z" fill="url(#aa-body)" ${s(1.6)}/>
-    ${spokeWheel(128, 61, 11)}` +
-    kneeling(96),
+    shadow(132, 100) +
+    `<path d="M130 58 L60 71 M130 61 L76 73" stroke="${METAL}" stroke-width="4.5" stroke-linecap="round"/>
+    <rect x="134" y="38" width="94" height="5" fill="url(#aa-metal)" ${s(1.2)}/>
+    <rect x="224" y="36" width="12" height="9" rx="1.5" fill="${DARK}" ${s(1.2)}/>
+    <path d="M120 30 L138 27 L142 58 L124 61Z" fill="url(#aa-body)" ${s(1.6)}/>
+    ${spokeWheel(130, 61, 11)}` +
+    fig(98, 1.12, KNEEL, { pack: true }),
 
   flak: () =>
     shadow(128, 100) +
@@ -175,34 +283,36 @@ const ART: Record<ArmoryKind, () => string> = {
     <circle cx="198" cy="65" r="9" fill="#1c1e16" ${s(2)}/><circle cx="198" cy="65" r="3.5" fill="#3a3f2c"/>`,
 
   artillery: () =>
-    shadow(130, 100) +
-    `<path d="M126 56 L46 72" stroke="${METAL}" stroke-width="5" stroke-linecap="round"/>
-    <path d="M118 50 L214 16" stroke="url(#aa-metal)" stroke-width="8" stroke-linecap="round"/>
-    <path d="M118 50 L214 16" stroke="${OL}" stroke-width="9.5" stroke-linecap="round" opacity=".35"/>
-    <path d="M120 46 L170 28" stroke="#555b44" stroke-width="5" stroke-linecap="round"/>
-    <path d="M108 36 L130 32 L134 52 L112 55Z" fill="url(#aa-body)" ${s(1.4)}/>
-    ${spokeWheel(124, 58, 14)}
-    <rect x="62" y="64" width="6" height="8" rx="2" fill="#b08a3a" ${s(1)}/><rect x="70" y="64" width="6" height="8" rx="2" fill="#b08a3a" ${s(1)}/>` +
-    standing(88, "none"),
+    shadow(132, 100) +
+    `<path d="M128 56 L52 72" stroke="${METAL}" stroke-width="5" stroke-linecap="round"/>
+    <path d="M120 50 L216 16" stroke="${OL}" stroke-width="10" stroke-linecap="round"/>
+    <path d="M120 50 L216 16" stroke="#4a5038" stroke-width="7.4" stroke-linecap="round"/>
+    <path d="M122 46 L172 28" stroke="#5e6548" stroke-width="4.6" stroke-linecap="round"/>
+    <path d="M110 36 L132 32 L136 52 L114 55Z" fill="url(#aa-body)" ${s(1.4)}/>
+    ${spokeWheel(126, 58, 14)}
+    <rect x="44" y="63" width="6" height="9" rx="2" fill="#b08a3a" ${s(1)}/><rect x="52" y="63" width="6" height="9" rx="2" fill="#b08a3a" ${s(1)}/>` +
+    fig(82, 1.15, CARRY, { pack: true, held: `${limb([[2, 42.5], [15, 35.5]], 4.8, "#b08a3a")}<path d="M15 35.5 l3.4 -1.8" stroke="${OL}" stroke-width="3.6" stroke-linecap="round"/>` }),
 
   engineer: () =>
-    shadow(140, 90) +
-    `<path d="M106 29 L94 12" stroke="#6b5a3a" stroke-width="2.6" stroke-linecap="round"/><path d="M90 10 l8 -2 l1 5z" fill="${METAL}"/>` +
-    standing(112, "satchel") +
-    `<rect x="176" y="62" width="18" height="10" rx="1.5" fill="#6b5a3a" ${s(1.2)}/>
-    <path d="M176 66 h-6 M174 63 l-2 -2" stroke="${OL}" stroke-width="1.2"/>
-    <path d="M194 66 Q210 58 216 66 T232 64" stroke="#2a2418" stroke-width="1.4" fill="none"/>
+    shadow(144, 90) +
+    fig(108, 1.2, ENG, {
+      gear: `${limb([[-10, 17], [-4, 50]], 2, "#6b5a3a")}<path d="M-13.5 12 L-7.5 10 L-8 18 L-12 19Z" fill="${METAL}" ${s(1)}/>${pack(ENG)}`,
+      held: `<path d="M11 49 v3" stroke="${OL}" stroke-width="1.4"/><rect x="5" y="51" width="13" height="9" rx="1.5" fill="#6b5a3a" ${s(1.2)}/>`,
+    }) +
+    `<rect x="178" y="62" width="18" height="10" rx="1.5" fill="#6b5a3a" ${s(1.2)}/>
+    <path d="M181 62v-3h12v3" stroke="${OL}" stroke-width="1.2" fill="none"/>
+    <path d="M196 67 Q210 58 216 66 T232 64" stroke="#2a2418" stroke-width="1.4" fill="none"/>
     <circle cx="232" cy="64" r="3" fill="#ffb04a"/><circle cx="232" cy="64" r="6" fill="#ff7a1a" opacity=".35"/>`,
 
   medic: () =>
-    shadow(140, 90) +
-    `<path d="M148 66 L210 64 L214 72 L150 73Z" fill="url(#aa-body)" ${s()}/>
-    <path d="M206 64 L226 66 L228 72 L212 72Z" fill="${TROUSERS}" ${s()}/>
-    <circle cx="146" cy="66" r="4.6" fill="${SKIN}" ${s(1.2)}/>
-    <path d="M128 72 L232 72" stroke="#c9c2a8" stroke-width="2"/>` +
-    kneeling(122, "down", "#e8e4d6", MEDIC_MARK(122, 38)) +
-    `<rect x="100" y="60" width="13" height="11" rx="2" fill="#e8e4d6" ${s(1.2)}/><path d="M106.5 62.5v6M103.5 65.5h6" stroke="#c8352b" stroke-width="1.8"/>
-    <rect x="116" y="48" width="5" height="5" fill="#f4f1e6"/><path d="M118.5 48.6v3.8M116.6 50.5h3.8" stroke="#c8352b" stroke-width="1.2"/>`,
+    shadow(150, 90) +
+    fig(166, 1.2, SUPINE) +
+    fig(140, 1.2, MEDIC, {
+      helmetColor: "#e8e4d6",
+      mark: `<path d="M12.5 30.4v5M10 32.9h5" stroke="#c8352b" stroke-width="1.7"/>`,
+      armband: true,
+    }) +
+    `<rect x="104" y="61" width="13" height="11" rx="2" fill="#e8e4d6" ${s(1.2)}/><path d="M110.5 63.5v6M107.5 66.5h6" stroke="#c8352b" stroke-width="1.8"/>`,
 
   bomber: () =>
     `<ellipse cx="130" cy="76" rx="70" ry="3" fill="#000" opacity=".2"/>` +
@@ -219,14 +329,14 @@ const ART: Record<ArmoryKind, () => string> = {
     `<ellipse cx="130" cy="76" rx="70" ry="3" fill="#000" opacity=".2"/>` +
     plane(70, -6, 0.72, "transport") +
     [
-      [44, 30],
-      [84, 46],
+      [44, 8],
+      [88, 24],
     ]
       .map(
         ([px, py]) => `<g transform="translate(${px} ${py})">
           <path d="M-16 0 A16 12 0 0 1 16 0 Q8 -3 0 0 Q-8 -3 -16 0Z" fill="#d8d2bc" ${s(1.2)}/>
-          <path d="M-15 0 L0 20 M15 0 L0 20 M0 0 L0 20" stroke="#8f8970" stroke-width="1"/>
-          <circle cx="0" cy="22" r="2.6" fill="#5d6842" ${s(1)}/><rect x="-2.5" y="24" width="5" height="8" rx="1.5" fill="url(#aa-body)" ${s(1)}/>
+          <path d="M-15 0 L-2.5 18 M15 0 L2.5 18 M0 0 L0 17" stroke="#8f8970" stroke-width="0.9"/>
+          <g transform="translate(0 10.9) scale(.42)">${person(HANG)}</g>
         </g>`,
       )
       .join(""),
