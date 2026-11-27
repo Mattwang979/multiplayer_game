@@ -19,6 +19,7 @@ import {
   MAX_UPGRADE_LEVEL,
   POP_CAP,
   STRUCTURES,
+  HUNTERS,
   UNITS,
   UNIT_TYPES,
   UPGRADES,
@@ -55,6 +56,10 @@ const ICON_UP = svg('<path d="M12 19V5M6 11l6-6 6 6"/>');
 const ICON_STOP = svg('<rect x="6" y="6" width="12" height="12" rx="1"/>');
 const ICON_BACK = svg('<path d="M10 7L5 12l5 5M5 12h10a4 4 0 0 1 4 4v1"/>');
 const ICON_CHECK = svg('<path d="M5 12l5 5 9-10"/>');
+const ICON_TARGET = svg('<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="1.5"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>');
+/** 獵殺目標的下拉選單選項 */
+const huntOptions = () => `<option value="">不指定</option>${UNIT_TYPES.map((t) => `<option value="${t}">${UNITS[t].name}</option>`).join("")}`;
+const isHunter = (type: string) => HUNTERS.includes(type as UnitType);
 const ICON_FORT = svg('<path d="M4 20V9l4 2V7l4 2 4-2v4l4-2v11z"/><path d="M10 20v-4h4v4"/>');
 const ICON_DRAG = svg('<path d="M9 11V5a2 2 0 0 1 4 0v6M13 10a2 2 0 0 1 4 0v3M9 11a2 2 0 0 0-4 0v3c0 4 3 7 7 7h1a5 5 0 0 0 5-5v-3"/>');
 const setText = (el: Element, t: string) => {
@@ -153,6 +158,22 @@ export class Hud {
     this.bottom.addEventListener("contextmenu", this.onContext);
     this.buildMenu.addEventListener("click", this.onBuildClick);
     this.groupBar.addEventListener("click", this.onGroupClick);
+    // 特種部隊的獵殺目標（下拉選單）
+    this.bottom.addEventListener("change", (e) => {
+      const sel = (e.target as HTMLElement).closest<HTMLSelectElement>("select[data-hunt]");
+      if (!sel) return;
+      session.hunt = sel.value;
+      play("click", 0.5);
+    });
+    this.groupBar.addEventListener("change", (e) => {
+      const sel = (e.target as HTMLElement).closest<HTMLSelectElement>("select[data-gb-hunt]");
+      if (!sel) return;
+      const s = session.state;
+      const ids = session.selectedUnits.filter((id) => isHunter(s?.units.get(id)?.type ?? ""));
+      if (ids.length) session.send("hunt", { units: ids, type: sel.value });
+      play("click", 0.5);
+      sel.blur();
+    });
     this.result.addEventListener("click", this.onResultClick);
     $("target-cancel").addEventListener("click", () => {
       session.airMode = null;
@@ -178,6 +199,7 @@ export class Hud {
     session.selectedNode = -1;
     session.selectedUnits = [];
     session.enter = true;
+    session.hunt = "";
     session.clearPicks();
     this.groupBar.classList.add("hidden");
     this.history = null;
@@ -231,7 +253,7 @@ export class Hud {
     const hq = me.hq >= 0 ? s.nodes[me.hq] : undefined;
     const hqRatio = hq && hq.owner === me.id ? hq.hp / hq.maxHp : 1;
     let level = s.time > 150 || s.time < this.hurtUntil ? 1 : 0;
-    if (hqRatio < 0.5 || s.duration - s.time < 90) level = 2;
+    if (hqRatio < 0.5 || (s.duration > 0 && s.duration - s.time < 90)) level = 2;
     if (!me.alive) level = 0;
     setMusicIntensity(level);
   }
@@ -284,12 +306,16 @@ export class Hud {
       pc.dataset.html = cards;
       pc.innerHTML = cards;
     }
-    const left = Math.max(0, s.duration - s.time);
+    // 有時限：倒數剩餘時間；不限時：顯示已經打了多久
+    const unlimited = s.duration <= 0;
+    const left = unlimited ? s.time : Math.max(0, s.duration - s.time);
     const mm = Math.floor(left / 60);
     const ss = Math.floor(left % 60).toString().padStart(2, "0");
     const timer = this.top.querySelector<HTMLElement>(".timer")!;
-    timer.classList.toggle("urgent", left < 60);
+    timer.classList.toggle("urgent", !unlimited && left < 60);
     setText(timer.querySelector("strong")!, `${mm}:${ss}`);
+    const tsub = timer.querySelector("span");
+    if (tsub) setText(tsub, unlimited ? "不限時" : "剩餘");
     setText(this.top.querySelector(".funds strong")!, `$${me.funds.toLocaleString()}`);
     const net = me.income - me.upkeep;
     const fsub = this.top.querySelector<HTMLElement>(".fsub")!;
@@ -421,6 +447,7 @@ export class Hud {
         <section class="dr-send">
           <div class="dr-send-head"><span class="dr-label" data-send-label></span><button data-act="pick-all">全選</button><button data-act="pick-none">清除</button></div>
           <div class="pick-chips" data-chips></div>
+          <label class="hunt-row hidden" data-hunt-row>${ICON_TARGET}<span>特種部隊獵殺</span><select data-hunt aria-label="特種部隊要獵殺的兵種">${huntOptions()}</select></label>
           <p class="drag-hint">${ICON_DRAG}<span>從堡壘<b>拖曳</b>到目的地派兵</span></p>
         </section>
         <button class="dr-close" data-act="close-drawer" aria-label="收起據點面板">${ICON_X}</button>
@@ -553,6 +580,12 @@ export class Hud {
     setText(sendLabel, picked ? `派出 ${picked} 支` : total ? `派出：全部 ${total} 支` : "派出");
     sendLabel.title = "沒選數量就是全部派出";
     const chips = UNIT_TYPES.map((t, i) => (have[i] ? `<button class="pick-chip${session.picks[i] ? " on" : ""}" data-pick="${t}" aria-pressed="${session.picks[i] > 0}">${UNITS[t].name} ${session.picks[i]}/${have[i]}</button>` : "")).join("");
+    const huntRow = this.bottom.querySelector<HTMLElement>("[data-hunt-row]")!;
+    const hasHunter = UNIT_TYPES.some((t, i) => isHunter(t) && have[i] > 0);
+    huntRow.classList.toggle("hidden", !hasHunter);
+    const huntSel = huntRow.querySelector<HTMLSelectElement>("select")!;
+    if (document.activeElement !== huntSel && huntSel.value !== session.hunt) huntSel.value = session.hunt;
+    huntSel.classList.toggle("on", !!session.hunt);
     const box = this.bottom.querySelector<HTMLElement>("[data-chips]")!;
     const html = chips || '<p class="pick-empty">堡壘裡還沒有兵，先在左邊買</p>';
     if (box.dataset.html !== html) {
@@ -619,6 +652,7 @@ export class Hud {
           <span class="gb-title"><b data-gb-n></b><span class="gb-where" data-gb-where></span></span>
           <span class="gb-sub"><span class="gb-hp"><i data-gb-hp></i></span><span class="gb-comp" data-gb-comp></span></span>
         </div>
+        <label class="gb-hunt hidden" data-gb-huntrow title="特種部隊要獵殺的兵種">${ICON_TARGET}<select data-gb-hunt aria-label="特種部隊要獵殺的兵種">${huntOptions()}</select></label>
         <button data-g="garrison" class="on">${ICON_FORT}進駐</button>
         <button data-g="halt">${ICON_STOP}停下${hk("S")}</button>
         <button data-g="retreat">${ICON_BACK}撤退${hk("R")}</button>
@@ -633,6 +667,12 @@ export class Hud {
     const hpBar = q("[data-gb-hp]");
     hpBar.style.width = `${Math.round(ratio * 100)}%`;
     hpBar.style.background = hpColor;
+    // 有特種部隊才出現「獵殺目標」選單；選單打開時不要去改它的值
+    const hunters = units.filter((u) => isHunter(u.type));
+    q("[data-gb-huntrow]").classList.toggle("hidden", hunters.length === 0);
+    const huntSel = q<HTMLSelectElement>("[data-gb-hunt]");
+    if (hunters.length && document.activeElement !== huntSel) huntSel.value = hunters[0].hunt ?? "";
+    huntSel.classList.toggle("on", !!huntSel.value);
     q("[data-g='garrison']").classList.toggle("hidden", !parked);
     q<HTMLButtonElement>("[data-g='halt']").disabled = first?.mode === "hold" && first.destNode < 0;
     q<HTMLButtonElement>("[data-g='retreat']").disabled = first?.mode === "retreat";

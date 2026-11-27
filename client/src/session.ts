@@ -30,6 +30,8 @@ export const session = {
   picks: UNIT_TYPES.map(() => 0),
   /** 到了目的地據點（或佔下來後）要不要進駐 */
   enter: true,
+  /** 從據點派出的特種部隊要獵殺的兵種（"" = 不指定） */
+  hunt: "",
   /** 選到的野外部隊（調度、撤退用） */
   selectedUnits: [] as string[],
 

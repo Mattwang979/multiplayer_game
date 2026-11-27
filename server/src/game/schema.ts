@@ -85,6 +85,7 @@ export const Unit = schema(
     group: t.string().default(""), // 同一次派出／調度的部隊共用一個編號（點一下就能選整隊）
     mode: t.string().default("move"), // move 前進、hold 駐守、retreat 撤退
     enter: t.boolean().default(true), // 到了目的地據點（或佔下來後）要不要進駐
+    hunt: t.string().default(""), // 特種部隊指定獵殺的兵種（"" = 不指定）
     destNode: t.int8().default(-1), // 目的地據點（-1 = 目的地在路上）
     destLane: t.int8().default(-1),
     destX: t.float32().default(0),
@@ -170,7 +171,8 @@ export const BattleState = schema(
     mapChoice: t.string().default("random"), // 大廳選的地圖
     mapId: t.string().default(""), // 這局實際用的地圖
     time: t.float32().default(0),
-    duration: t.float32().default(600),
+    duration: t.float32().default(600), // 這局的時間上限（秒）；0 = 不限時
+    unlimited: t.boolean().default(false), // 大廳設定：不限時（打到只剩一個大本營）
     winnerId: t.string().default(""),
     endReason: t.string().default(""),
     players: t.map(Player),

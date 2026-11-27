@@ -50,7 +50,7 @@ const FORMATION: Record<string, [number, number][]> = {
   sniper: [[0, 0]],
   flame: [[3, -6], [-4, 6]],
 };
-const MAN_TEX: Record<string, string> = { engineer: "engineer", medic: "medic", sniper: "sniper", flame: "flame" };
+const MAN_TEX: Record<string, string> = { engineer: "engineer", medic: "medic", sniper: "sniper", flame: "flame", commando: "commando" };
 const VEHICLE_TEX: Record<string, string> = { car: "car", flak: "flakv" };
 
 /**
@@ -1127,6 +1127,14 @@ export class BattleScene extends Phaser.Scene {
         this.fx.tracer(mx + 10, my, tp.x, tp.y);
         this.fx.impact(tp.x, tp.y, 0.5);
         play("mg", vol * 0.45);
+        break;
+      case "commando":
+        // 衝鋒槍短連發
+        this.fx.muzzle(mx + 4, my, v.angle, 0.65);
+        this.fx.tracer(mx, my, tp.x, tp.y);
+        this.fx.tracer(mx, my, tp.x + rnd(-6, 6), tp.y + rnd(-6, 6));
+        this.fx.impact(tp.x, tp.y, 0.6);
+        play("mg", vol * 0.4);
         break;
       case "rifle":
       case "para":
@@ -2213,7 +2221,7 @@ export class BattleScene extends Phaser.Scene {
       if ("node" in dest && dest.node === d.node) return;
       this.selectNode(d.node, false);
       const counts = session.picks.slice();
-      session.send("dispatch", { node: d.node, counts, via, dest, enter: session.enter });
+      session.send("dispatch", { node: d.node, counts, via, dest, enter: session.enter, hunt: session.hunt });
       session.clearPicks();
       bus.emit("picksChanged");
       play("deploy", 0.8);

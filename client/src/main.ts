@@ -9,7 +9,7 @@ import { createRoom, errorText, forgetRoom, joinRoom, rememberRoom, tryReconnect
 import { bus, session } from "./session";
 import { Armory } from "./ui/armory";
 import { Hud } from "./ui/hud";
-import { bindLobbyActions, bindPracticeLevel, homeError, renderLobby, savedBotLevel, showScreen } from "./ui/screens";
+import { bindLobbyActions, bindPracticeLevel, homeError, renderLobby, savedBotLevel, savedUnlimited, showScreen } from "./ui/screens";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -254,7 +254,12 @@ function bindHome() {
   if (code) $<HTMLInputElement>("code-input").value = code.toUpperCase();
 
   $("btn-create").addEventListener("click", (e) =>
-    withBusy(e.currentTarget as HTMLButtonElement, async () => attach(await createRoom(playerName()))),
+    withBusy(e.currentTarget as HTMLButtonElement, async () => {
+      const room = await createRoom(playerName());
+      attach(room);
+      // 房間沿用上次選的對局時間
+      if (savedUnlimited()) room.send("setUnlimited", { on: true });
+    }),
   );
   $("btn-practice").addEventListener("click", (e) =>
     withBusy(e.currentTarget as HTMLButtonElement, async () => {
@@ -263,6 +268,7 @@ function bindHome() {
       const level = savedBotLevel();
       room.send("addBot", { level });
       room.send("addBot", { level });
+      room.send("setUnlimited", { on: savedUnlimited() });
       room.send("start", {});
     }),
   );

@@ -199,6 +199,40 @@ function soldier(ctx: Ctx, f: Faction) {
   ctx.fill();
 }
 
+/** 特種部隊：深色制服、黑色貝雷帽（帽徽金色）、短衝鋒槍 */
+function commandoMan(ctx: Ctx, f: Faction) {
+  ctx.translate(9, 9);
+  ctx.strokeStyle = OUT;
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#2e3324";
+  ctx.beginPath();
+  ctx.ellipse(-1, 0, 4.6, 7.2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  // 衝鋒槍
+  ctx.strokeStyle = "#1d1d17";
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(1, 3.2);
+  ctx.lineTo(7.5, 3.2);
+  ctx.stroke();
+  // 頭（陣營色）＋黑色貝雷帽
+  ctx.fillStyle = f.css;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.arc(0, 0, 4.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#14150f";
+  ctx.beginPath();
+  ctx.ellipse(-1.4, -0.6, 3.6, 4.4, -0.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#f2c14e";
+  ctx.beginPath();
+  ctx.arc(-1.2, -2.6, 1, 0, Math.PI * 2);
+  ctx.fill();
+}
+
 /** 工兵：背著炸藥包（黃色）、手上拿工具，沒有步槍 */
 function engineerMan(ctx: Ctx, f: Faction) {
   ctx.translate(9, 9);
@@ -873,6 +907,7 @@ function radial(ctx: Ctx, size: number, stops: [number, string][]) {
 export function makeTextures(scene: Phaser.Scene) {
   FACTIONS.forEach((f, i) => {
     canvasTex(scene, `soldier${i}`, 18, 18, (c) => soldier(c, f));
+    canvasTex(scene, `commando${i}`, 18, 18, (c) => commandoMan(c, f));
     canvasTex(scene, `engineer${i}`, 18, 18, (c) => engineerMan(c, f));
     canvasTex(scene, `medic${i}`, 18, 18, (c) => medicMan(c, f));
     canvasTex(scene, `tank${i}`, 56, 38, (c) => tankHull(c, f));

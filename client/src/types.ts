@@ -77,6 +77,7 @@ export interface UnitState {
   group: string;
   mode: string; // move / hold / retreat
   enter: boolean;
+  hunt: string; // 特種部隊指定獵殺的兵種
   destNode: number;
   destLane: number;
   destX: number;
@@ -127,7 +128,8 @@ export interface GameState {
   mapChoice: string;
   mapId: string;
   time: number;
-  duration: number;
+  duration: number; // 0 = 不限時
+  unlimited: boolean;
   winnerId: string;
   endReason: string;
   players: MapLike<PlayerState>;

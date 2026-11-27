@@ -73,7 +73,7 @@ export const OUTLINE = 0x1d1d17;
 
 // ---------- 傷害類型與護甲 ----------
 export type ArmorClass = "soft" | "light" | "hard" | "building"; // 步兵、輕裝甲車輛、戰車、建築
-export type WeaponClass = "rifle" | "mg" | "at" | "cannon" | "shell" | "bomb" | "demo" | "sniper" | "flame" | "flak" | "none";
+export type WeaponClass = "rifle" | "mg" | "at" | "cannon" | "shell" | "bomb" | "demo" | "sniper" | "flame" | "flak" | "commando" | "none";
 // 距離、速度都是畫面上的像素
 
 // 傷害倍率：武器打不同護甲的效果。剋制關係主要從這裡來。
@@ -88,22 +88,23 @@ export const DAMAGE_TABLE: Record<WeaponClass, Record<ArmorClass, number>> = {
   sniper: { soft: 1.0, light: 0.15, hard: 0.05, building: 0.1 }, // 狙擊：一槍一個，打不穿裝甲
   flame: { soft: 1.3, light: 0.7, hard: 0.3, building: 1.2 }, // 火焰：近距離燒一片
   flak: { soft: 0.8, light: 1.0, hard: 0.3, building: 0.3 }, // 防空砲車平射
+  commando: { soft: 1.0, light: 0.9, hard: 0.7, building: 0.6 }, // 特種部隊：衝鋒槍加炸藥，什麼都打得動
   none: { soft: 0, light: 0, hard: 0, building: 0 },
 };
 
 // ---------- 地面部隊 ----------
 export type UnitType =
-  | "rifle" | "mg" | "sniper" | "flame" | "car" | "tank" | "at" | "flak" | "artillery" | "engineer" | "medic" | "para";
-/** 可以在據點買的兵種（空降兵只能由運輸機投放） */
-export const UNIT_TYPES: UnitType[] = ["rifle", "mg", "sniper", "flame", "car", "tank", "at", "flak", "artillery", "engineer", "medic"];
+  | "rifle" | "mg" | "sniper" | "flame" | "car" | "tank" | "at" | "flak" | "artillery" | "engineer" | "medic" | "commando" | "para";
+/** 可以在據點買的兵種（空降兵只能由運輸機投放）；新兵種一律加在最後，派兵數量的順序才不會亂 */
+export const UNIT_TYPES: UnitType[] = ["rifle", "mg", "sniper", "flame", "car", "tank", "at", "flak", "artillery", "engineer", "medic", "commando"];
 /** 介面上的兵種分頁 */
 export const UNIT_GROUPS: { name: string; types: UnitType[] }[] = [
   { name: "步兵", types: ["rifle", "mg", "sniper", "flame"] },
   { name: "車砲", types: ["car", "tank", "at", "flak"] },
-  { name: "支援", types: ["artillery", "engineer", "medic"] },
+  { name: "支援", types: ["artillery", "engineer", "medic", "commando"] },
 ];
 /** 一次派出很多兵時的出門順序：前排先走、支援部隊殿後 */
-export const RELEASE_ORDER: UnitType[] = ["tank", "car", "rifle", "flame", "para", "mg", "sniper", "at", "flak", "engineer", "medic", "artillery"];
+export const RELEASE_ORDER: UnitType[] = ["tank", "car", "commando", "rifle", "flame", "para", "mg", "sniper", "at", "flak", "engineer", "medic", "artillery"];
 
 export interface UnitDef {
   name: string;
@@ -174,11 +175,24 @@ export const UNITS: Record<UnitType, UnitDef> = {
     name: "醫療兵", short: "幫附近步兵回血，不會攻擊", cost: 70, pop: 1, hp: 80, damage: 0, cooldown: 1,
     range: 80, speed: 30, armor: "soft", weapon: "none", members: 2, heal: 7, healTargets: 3, hotkey: "-",
   },
+  commando: {
+    name: "特種部隊", short: "可以指定獵殺的兵種，打它傷害 +50%", cost: 160, pop: 2, hp: 170, damage: 20, cooldown: 0.8,
+    range: 115, speed: 34, armor: "soft", weapon: "commando", members: 3, hotkey: "=",
+  },
   para: {
     name: "空降兵", short: "由運輸機投放", cost: 100, pop: 1, hp: 100, damage: 12, cooldown: 1.0,
     range: 90, speed: 32, armor: "soft", weapon: "rifle", members: 4, hotkey: "",
   },
 };
+
+/** 特種部隊獵殺指定兵種：傷害倍率、射程倍率（只對指定的兵種） */
+export const HUNT_BONUS = 1.5;
+export const HUNT_RANGE = 1.2;
+/** 能指定獵殺目標的兵種 */
+export const HUNTERS: UnitType[] = ["commando"];
+/** 可以被指定為獵殺目標的兵種（空降兵算步兵班一類，不單獨列） */
+export const HUNT_TARGETS: UnitType[] = UNIT_TYPES;
+export const isHuntTarget = (v: unknown): v is UnitType => typeof v === "string" && (HUNT_TARGETS as string[]).includes(v);
 
 // ---------- 空軍 ----------
 export type AirKind = "bomber" | "transport";

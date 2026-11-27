@@ -13,6 +13,7 @@ const UNIT_PATHS: Record<UnitType | "bomber" | "transport" | BuildKind, string> 
   artillery: '<circle cx="11" cy="22" r="5"/><path d="M12 17L28 7" stroke-width="3.2"/><path d="M11 22L3 29"/>',
   engineer: '<path d="M20 4a6 6 0 0 0-5 8L5 22a3 3 0 0 0 4 4l10-10a6 6 0 0 0 8-5l-4 2-3-3 2-4z"/>',
   medic: '<circle cx="16" cy="16" r="12"/><path d="M16 9v14M9 16h14" stroke-width="3.4"/>',
+  commando: '<circle cx="20" cy="12" r="7"/><path d="M20 3v4M20 17v4M11 12h4M25 12h4"/><path d="M4 29l9-9M10 18l4 4"/>',
   para: '<path d="M4 14a12 10 0 0 1 24 0z"/><path d="M4 14l12 12 12-12M16 14v12"/><circle cx="16" cy="28" r="2"/>',
   bomber: '<path d="M16 3v24"/><path d="M3 15l13-3 13 3"/><path d="M10 27h12"/><path d="M8 13v4M24 13v4"/>',
   transport: '<path d="M4 14a12 10 0 0 1 24 0z"/><path d="M4 14l12 12 12-12M16 14v12"/><circle cx="16" cy="28" r="2"/>',

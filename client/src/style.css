@@ -128,7 +128,15 @@ button { font-family: inherit; }
 .join-btn:disabled, .practice-btn:disabled, .tool-btn:disabled { opacity: .45; cursor: default; }
 .practice-box { flex: none; display: flex; flex-direction: column; gap: 10px; padding: 12px; background: rgba(22, 26, 19, .92); border: 1px solid var(--line); }
 .practice-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.practice-head span { font-size: 14px; color: var(--muted); }
+.pt-toggle {
+  min-height: 40px; padding: 0 10px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: transparent;
+  color: #cfc6aa; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer;
+}
+.pt-toggle:hover { border-color: var(--line-2); }
+.pt-toggle[aria-pressed="true"] { color: var(--text); }
+.pt-toggle .sw { width: 32px; height: 18px; border-radius: 9px; }
+.pt-toggle .sw::after { top: 2px; left: 2px; width: 14px; height: 14px; }
+.pt-toggle[aria-pressed="true"] > .sw::after { transform: translateX(14px); }
 .practice-btn {
   min-height: 46px; padding: 0 16px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line-2); background: var(--panel-2);
   color: var(--text); font-size: 17px; font-weight: 900; letter-spacing: 2px; cursor: pointer; transition: border-color .15s;
@@ -176,7 +184,10 @@ button { font-family: inherit; }
 .arm-tabs button[aria-selected="true"] { background: var(--gold); border-color: var(--gold); color: #1b1405; font-weight: 900; }
 .arm-cycle { margin: 0 0 0 auto; padding-left: 8px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .arm-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; }
-.arm-grid { min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.arm-grid { min-height: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-rows: repeat(4, minmax(0, 1fr)); gap: 6px; }
+@media (max-width: 760px) {
+  .arm-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: none; grid-auto-rows: 66px; overflow-y: auto; }
+}
 .arm-card {
   position: relative; min-height: 0; padding: 6px 8px; display: flex; flex-direction: column; justify-content: space-between; gap: 2px; text-align: left;
   background: var(--panel); border: 1px solid var(--line); color: var(--text); cursor: pointer; transition: border-color .15s, background .15s;
@@ -341,6 +352,20 @@ body.portrait .arm-detail { overflow: visible; }
 .slot-note { margin: 0; font-size: 12px; line-height: 1.5; }
 .lobby-side { min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .map-box { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); }
+/* 對局時間：10 分鐘／不限時 */
+.time-row { flex: none; display: flex; align-items: center; gap: 8px; }
+.time-row > span { flex: none; font-size: 12px; font-weight: 700; letter-spacing: 1px; color: var(--muted); }
+.time-seg { flex: 1; display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line-2); background: #11120c; }
+.time-seg button {
+  min-height: 36px; border: 0; border-left: 1px solid var(--line-2); background: transparent; color: var(--muted);
+  font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.time-seg button:first-child { border-left: 0; }
+.time-seg button[aria-pressed="true"] { background: var(--gold); color: #1b1405; font-weight: 900; }
+.time-seg button:disabled { cursor: default; }
+.time-seg button:disabled:not([aria-pressed="true"]) { opacity: .6; }
+.time-seg button:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; }
+body:not(.mobile) .time-seg button { min-height: 42px; font-size: 14px; }
 .map-view { position: relative; }
 .map-thumb { aspect-ratio: 16 / 9; overflow: hidden; background: #2a2619; }
 .map-thumb svg { display: block; width: 100%; height: 100%; }
@@ -601,6 +626,19 @@ body:not(.mobile) .group-bar { --gb-side: 120px; }
 .group-bar button.on svg { color: var(--gold); }
 .group-bar button svg { width: 15px; height: 15px; }
 .group-bar .gb-x { width: 42px; padding: 0; justify-content: center; background: transparent; color: #cfc6aa; }
+/* 特種部隊獵殺目標：下拉選單 */
+.gb-hunt, .hunt-row { display: flex; align-items: center; gap: 4px; color: #cfc6aa; }
+.gb-hunt { flex: none; min-height: 42px; padding: 0 2px 0 8px; border: 1px solid var(--line-2); background: var(--panel-2); }
+.gb-hunt svg, .hunt-row svg { width: 15px; height: 15px; flex: none; color: #ff8a70; }
+.gb-hunt select, .hunt-row select {
+  min-height: 34px; max-width: 108px; padding: 0 6px; border: 0; background: transparent; color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 900; cursor: pointer;
+}
+.gb-hunt select option, .hunt-row select option { background: #1f241a; color: var(--text); }
+.gb-hunt select.on, .hunt-row select.on { color: #ff9a6a; }
+.gb-hunt:focus-within, .hunt-row:focus-within { border-color: var(--gold); }
+.hunt-row { margin-top: 4px; padding: 2px 4px 2px 8px; font-size: 12px; font-weight: 700; border: 1px solid var(--line-2); background: rgba(31,36,26,.9); align-self: flex-start; }
+.hunt-row span { white-space: nowrap; }
 .group-bar kbd { font-family: var(--stencil); font-size: 11px; font-weight: 400; color: var(--muted); }
 .fsub.warn { color: #ff8a70; }
 
@@ -774,7 +812,7 @@ body.mobile .cb-text b { font-size: 19px; letter-spacing: 4px; }
 body.mobile .cb-text small { font-size: 12px; }
 body.mobile .join-btn { width: 80px; font-size: 16px; }
 body.mobile .practice-box { padding: 8px; gap: 6px; }
-body.mobile .practice-head span { font-size: 13px; }
+body.mobile .pt-toggle { min-height: 36px; font-size: 13px; }
 body.mobile .practice-btn { min-height: 38px; padding: 0 14px; font-size: 15px; }
 body.mobile .practice-box .lvl-seg button { min-height: 34px; font-size: 13px; }
 body.mobile .practice-box .lvl-desc { font-size: 12px; }

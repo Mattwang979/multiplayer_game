@@ -30,6 +30,23 @@ export function emblemSvg(f: Faction, size = 56) {
   return `<svg class="emblem" viewBox="-20 -20 40 40" width="${size}" height="${size}" aria-hidden="true"><circle r="18" fill="${f.css}" stroke="#1d1d17" stroke-width="2.5"/>${shape}</svg>`;
 }
 
+// ---------- 不限時（首頁練習和建立房間的預設值） ----------
+const UNLIMITED_KEY = "frontline.unlimited";
+export function savedUnlimited() {
+  try {
+    return localStorage.getItem(UNLIMITED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+export function saveUnlimited(on: boolean) {
+  try {
+    localStorage.setItem(UNLIMITED_KEY, on ? "1" : "0");
+  } catch {
+    // 存不了就算了
+  }
+}
+
 // ---------- 電腦難度 ----------
 const LEVEL_KEY = "frontline.botLevel";
 
@@ -73,6 +90,15 @@ export function bindPracticeLevel() {
     desc.textContent = BOT_LEVEL_DEFS[lv].short;
   };
   draw();
+  // 不限時開關
+  const unl = $("practice-unlimited");
+  const drawUnl = () => unl.setAttribute("aria-pressed", String(savedUnlimited()));
+  drawUnl();
+  unl.addEventListener("click", () => {
+    play("click");
+    saveUnlimited(!savedUnlimited());
+    drawUnl();
+  });
   box.addEventListener("click", (e) => {
     const el = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-level]");
     if (!el || !isBotLevel(el.dataset.level)) return;
@@ -155,7 +181,11 @@ export function renderLobby() {
     box.innerHTML = slots;
   }
 
-  renderMaps(choice, count, isHost);
+  renderMaps(choice, count, isHost, !!s.unlimited);
+  $("lobby-time").querySelectorAll<HTMLButtonElement>("button[data-time]").forEach((b) => {
+    b.setAttribute("aria-pressed", String((b.dataset.time === "unlimited") === !!s.unlimited));
+    b.disabled = !isHost;
+  });
   const start = $<HTMLButtonElement>("btn-start");
   start.classList.toggle("hidden", !isHost);
   start.disabled = count < MIN_PLAYERS;
@@ -200,7 +230,7 @@ function mapPreview(def: MapDef) {
 /** 地圖：一次顯示一張大縮圖，左右切換（房主才能換），下面的點也能直接選 */
 const MAP_IDS = ["random", ...MAPS.map((m) => m.id)];
 
-function renderMaps(choice: string, count: number, isHost: boolean) {
+function renderMaps(choice: string, count: number, isHost: boolean, unlimited: boolean) {
   const m = MAPS.find((x) => x.id === choice);
   const idx = Math.max(0, MAP_IDS.indexOf(choice));
   const range = m ? (m.minPlayers === m.slots ? `${m.slots} 人` : `${m.minPlayers}–${m.slots} 人`) : "依人數";
@@ -218,7 +248,7 @@ function renderMaps(choice: string, count: number, isHost: boolean) {
     <div class="map-info">
       <div class="map-title"><span class="map-name">${m ? m.name : "隨機地圖"}</span><span class="map-dots">${dots}</span></div>
       <p class="map-desc${fits ? "" : " warn"}">${m ? (fits ? m.desc : `目前 ${count} 方，這張最多 ${m.slots} 方；開戰時會改成隨機`) : "從符合人數的地圖裡抽一張"}</p>
-      <p class="map-n">${range}・10 分鐘${isHost ? "" : "・房主選圖"}</p>
+      <p class="map-n">${range}・${unlimited ? "不限時" : "10 分鐘"}${isHost ? "" : "・房主選圖"}</p>
     </div>`;
   const box = $("lobby-maps");
   if (box.dataset.html !== html) {
@@ -249,6 +279,14 @@ export function bindLobbyActions() {
   $("btn-start").addEventListener("click", () => {
     play("click");
     session.send("start");
+  });
+  $("lobby-time").addEventListener("click", (e) => {
+    const el = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-time]");
+    if (!el || el.disabled) return;
+    play("click");
+    const on = el.dataset.time === "unlimited";
+    saveUnlimited(on);
+    session.send("setUnlimited", { on });
   });
   $("btn-copy").addEventListener("click", async () => {
     const code = session.room?.roomId ?? "";

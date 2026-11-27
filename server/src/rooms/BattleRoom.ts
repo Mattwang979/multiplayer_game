@@ -93,6 +93,11 @@ export class BattleRoom extends Room<{ state: BattleState }> {
       const id = typeof msg?.map === "string" ? msg.map : "random";
       if (id === "random" || MAPS.some((m) => m.id === id)) this.state.mapChoice = id;
     },
+    /** 房主切換「不限時」 */
+    setUnlimited: (client: Client, msg: { on?: boolean }) => {
+      if (!this.isHost(client) || this.state.phase !== "lobby") return;
+      this.state.unlimited = msg?.on === true;
+    },
     start: (client: Client) => {
       if (!this.isHost(client) || this.state.phase !== "lobby") return;
       if (this.state.players.size < MIN_PLAYERS) return this.notice(client, "至少要兩方才能開戰，可以先加電腦");
@@ -118,16 +123,23 @@ export class BattleRoom extends Room<{ state: BattleState }> {
       if (!UNIT_TYPES.includes(type)) return;
       this.reply(client, this.battle.buy(client.sessionId, num(msg?.node), type, num(msg?.count)));
     },
-    dispatch: (client: Client, msg: { node?: number; counts?: number[]; via?: number[]; dest?: unknown; enter?: boolean }) => {
+    dispatch: (client: Client, msg: { node?: number; counts?: number[]; via?: number[]; dest?: unknown; enter?: boolean; hunt?: unknown }) => {
       const dest = cleanDest(msg?.dest);
       if (!dest) return;
       const counts = Array.isArray(msg?.counts) ? msg.counts.slice(0, UNIT_TYPES.length).map(num) : [];
-      this.reply(client, this.battle.dispatch(client.sessionId, num(msg?.node), counts, numList(msg?.via), dest, msg?.enter !== false));
+      this.reply(
+        client,
+        this.battle.dispatch(client.sessionId, num(msg?.node), counts, numList(msg?.via), dest, msg?.enter !== false, typeof msg?.hunt === "string" ? msg.hunt : undefined),
+      );
     },
     order: (client: Client, msg: { units?: unknown; via?: number[]; dest?: unknown; enter?: boolean }) => {
       const dest = cleanDest(msg?.dest);
       if (!dest) return;
       this.reply(client, this.battle.order(client.sessionId, idList(msg?.units), numList(msg?.via), dest, msg?.enter !== false));
+    },
+    /** 特種部隊指定獵殺的兵種（"" = 取消） */
+    hunt: (client: Client, msg: { units?: unknown; type?: unknown }) => {
+      this.reply(client, this.battle.setHunt(client.sessionId, idList(msg?.units), typeof msg?.type === "string" ? msg.type : ""));
     },
     retreat: (client: Client, msg: { units?: unknown }) => {
       this.reply(client, this.battle.retreat(client.sessionId, idList(msg?.units)));
@@ -244,7 +256,8 @@ export class BattleRoom extends Room<{ state: BattleState }> {
     this.bots.clear();
     // 開發測試用：設環境變數 MATCH_SECONDS 可以縮短對局（正式環境不設就是 10 分鐘）
     const testDuration = Number(process.env.MATCH_SECONDS);
-    this.battle.start(Number.isFinite(testDuration) && testDuration >= 30 ? testDuration : undefined);
+    const limit = Number.isFinite(testDuration) && testDuration >= 30 ? testDuration : undefined;
+    this.battle.start(this.state.unlimited ? 0 : limit);
     this.lock();
   }
 

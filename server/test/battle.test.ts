@@ -750,3 +750,126 @@ test("停下：行進中的部隊就地駐守，不再往前走；撤退中的�
   // 別人的部隊、駐軍不能叫停
   assert.equal(battle.halt("p1", [a.id]), "沒有選到野外的部隊");
 });
+
+test("不限時：時間超過 10 分鐘還在打，隨機事件照樣會來", () => {
+  const state = new BattleState();
+  state.mapChoice = "pass";
+  for (let i = 0; i < 2; i++) {
+    const p = new Player();
+    p.id = `p${i}`;
+    p.name = `P${i}`;
+    p.faction = i;
+    state.players.set(p.id, p);
+  }
+  const events: string[] = [];
+  const battle = new Battle(state, (type) => events.push(type), seeded(3));
+  battle.start(0);
+  assert.equal(state.duration, 0);
+  run(battle, 700);
+  assert.equal(state.phase, "playing");
+  assert.ok(state.time > 690);
+  // 600 秒之後也還會有事件
+  const late = events.filter((t) => t === "event").length;
+  run(battle, 200);
+  assert.ok(events.filter((t) => t === "event").length > late, "不限時的後段也要有隨機事件");
+});
+
+test("有時限：時間到就結束", () => {
+  const { battle, state } = setup(2, "pass");
+  battle.start(40);
+  run(battle, 45);
+  assert.equal(state.phase, "ended");
+  assert.ok(state.endReason.startsWith("時間到"));
+});
+
+/** 谷地道路上，p0 的一支兵面對 p1 的幾支兵（距離是沿路的距離） */
+function standoff(hunter: UnitType, hunt: string, foes: [UnitType, number][]) {
+  const { battle, state } = setup(2, "pass");
+  const lane = laneBetween(battle, 0, 7);
+  const geom = battle.map.lanes[lane];
+  state.units.forEach((u) => state.units.delete(u.id));
+  const x0 = nodeEnd(geom, 0);
+  const d0 = nodeDir(geom, 0);
+  const [me] = place(battle, "p0", hunter, lane, x0 + d0 * 200, d0, 7);
+  me.hunt = hunt;
+  const made = foes.map(([type, dist]) => {
+    const [u] = place(battle, "p1", type, lane, x0 + d0 * (200 + dist), d0 === 1 ? -1 : 1, 0);
+    return u;
+  });
+  return { battle, state, me, made };
+}
+
+test("特種部隊：指定戰車時，射程內有戰車就先打戰車（就算步兵更近）", () => {
+  const { battle, made } = standoff("commando", "tank", [["rifle", 60], ["tank", 125]]);
+  const [rifle, tank] = made;
+  run(battle, 2, () => rifle.hp < rifle.maxHp || tank.hp < tank.maxHp);
+  assert.ok(tank.hp < tank.maxHp, "戰車要先挨打");
+  assert.equal(rifle.hp, rifle.maxHp);
+});
+
+test("特種部隊：沒指定就打最近的", () => {
+  const { battle, made } = standoff("commando", "", [["rifle", 60], ["tank", 100]]);
+  const [rifle, tank] = made;
+  run(battle, 2, () => rifle.hp < rifle.maxHp || tank.hp < tank.maxHp);
+  assert.ok(rifle.hp < rifle.maxHp);
+  assert.equal(tank.hp, tank.maxHp);
+});
+
+test("特種部隊：打指定的兵種有 +50% 傷害", () => {
+  const plain = standoff("commando", "", [["car", 80]]);
+  run(plain.battle, 2, () => plain.made[0].hp < plain.made[0].maxHp);
+  const base = plain.made[0].maxHp - plain.made[0].hp;
+  const hunting = standoff("commando", "car", [["car", 80]]);
+  run(hunting.battle, 2, () => hunting.made[0].hp < hunting.made[0].maxHp);
+  const bonus = hunting.made[0].maxHp - hunting.made[0].hp;
+  assert.ok(base > 0);
+  assert.ok(Math.abs(bonus / base - 1.5) < 0.01, `倍率 ${bonus / base}`);
+});
+
+test("特種部隊：派兵時帶的獵殺目標只套用在特種部隊身上，之後還能改", () => {
+  const { battle, state } = setup(2, "pass");
+  const hq = state.players.get("p0")!.hq;
+  give(battle, "p0", "commando", hq, 2);
+  give(battle, "p0", "rifle", hq, 1);
+  const dest = battle.map.lanes[battle.map.adj[hq][0]];
+  const target = dest.a === hq ? dest.b : dest.a;
+  assert.equal(battle.dispatch("p0", hq, [], [], { node: target }, true, "tank"), null);
+  const mine = units(battle, (u) => u.owner === "p0" && u.departAt > 0);
+  assert.ok(mine.filter((u) => u.type === "commando").every((u) => u.hunt === "tank"));
+  assert.ok(mine.filter((u) => u.type !== "commando").every((u) => u.hunt === ""));
+  const ids = mine.map((u) => u.id);
+  assert.equal(battle.setHunt("p0", ids, "at"), null);
+  assert.ok(mine.filter((u) => u.type === "commando").every((u) => u.hunt === "at"));
+  assert.equal(battle.setHunt("p0", ids, "nope"), null);
+  assert.ok(mine.filter((u) => u.type === "commando").every((u) => u.hunt === ""), "亂填的兵種 = 取消");
+  assert.notEqual(battle.setHunt("p0", mine.filter((u) => u.type === "rifle").map((u) => u.id), "tank"), null);
+});
+
+test("特種部隊：兩支（指定戰車）打贏一輛戰車；一支（沒指定）打不贏", () => {
+  const h = (n: number, hunt: string) => {
+    const { battle, state } = setup(2, "pass");
+    const lane = laneBetween(battle, 0, 7);
+    const geom = battle.map.lanes[lane];
+    state.units.forEach((u) => state.units.delete(u.id));
+    const x0 = nodeEnd(geom, 0);
+    const d0 = nodeDir(geom, 0);
+    place(battle, "p0", "commando", lane, x0 + d0 * 160, d0, 7, n).forEach((u) => (u.hunt = hunt));
+    place(battle, "p1", "tank", lane, x0 + d0 * (geom.len - 120), d0 === 1 ? -1 : 1, 0, 1);
+    state.nodes[0].owner = "";
+    state.nodes[0].hp = 0;
+    let result = "timeout";
+    run(battle, 150, () => {
+      let s0 = 0;
+      let s1 = 0;
+      state.units.forEach((u) => (u.owner === "p0" ? s0++ : s1++));
+      if (s0 === 0 || s1 === 0) {
+        result = s0 > 0 ? "a" : "b";
+        return true;
+      }
+      return false;
+    });
+    return result;
+  };
+  assert.equal(h(2, "tank"), "a");
+  assert.equal(h(1, ""), "b");
+});

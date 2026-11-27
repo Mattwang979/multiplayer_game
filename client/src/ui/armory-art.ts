@@ -44,11 +44,26 @@ function helmet([hx, hy]: P, color = HELMET, mark = "") {
     <path d="M${hx - 7} ${hy - 0.4}H${hx + 7.2}" stroke="${OL}" stroke-width="2" stroke-linecap="round"/>${mark}`;
 }
 
+/** 黑色貝雷帽，往右前方斜戴，金色帽徽 */
+function beret([hx, hy]: P) {
+  return `<path d="M${hx - 5} ${hy - 1.2} Q${hx - 4.5} ${hy - 7.5} ${hx + 2} ${hy - 6.6} Q${hx + 7.5} ${hy - 5.6} ${hx + 6.2} ${hy - 2.6} Q${hx + 1} ${hy - 3.4} ${hx - 5} ${hy - 1.2}Z" fill="#17181a" ${s(1.2)}/>
+    <circle cx="${hx - 1.6}" cy="${hy - 4.6}" r="1.1" fill="#f2c14e"/>`;
+}
+
 /**
  * 依關節畫人：後腳 → 後手 → 背包 → 身體 → 前腳 → 手上的東西 → 頭 → 前手。
  * gear 畫在身體後面（背包、油桶），held 畫在前手底下（槍、箱子）
  */
-function person(p: Pose, opts: { gear?: string; held?: string; helmetColor?: string; mark?: string; armband?: boolean } = {}) {
+interface Kit {
+  gear?: string;
+  held?: string;
+  helmetColor?: string;
+  mark?: string;
+  armband?: boolean;
+  beret?: boolean; // 特種部隊：黑色貝雷帽、深色制服
+}
+function person(p: Pose, opts: Kit = {}) {
+  const [uni, uniBack, leg, legBack] = opts.beret ? ["#454b37", "#33382a", "#2f3427", "#25291f"] : [UNIFORM, UNIFORM_BACK, LEG, LEG_BACK];
   const boots = p.boots ?? [
     [p.bf, [p.bf[0] + 4.5, p.bf[1]]],
     [p.ff, [p.ff[0] + 4.5, p.ff[1]]],
@@ -63,16 +78,16 @@ function person(p: Pose, opts: { gear?: string; held?: string; helmetColor?: str
   const ny = (dx / len) * 6;
   const [hx, hy] = p.head;
   return `<g>
-    ${limb([p.hip, p.bk, p.bf], 6.2, LEG_BACK)}${limb(boots[0], 3.6, "#1c1e16")}
-    ${limb([p.sh, p.be, p.bh], 4.4, UNIFORM_BACK)}
+    ${limb([p.hip, p.bk, p.bf], 6.2, legBack)}${limb(boots[0], 3.6, "#1c1e16")}
+    ${limb([p.sh, p.be, p.bh], 4.4, uniBack)}
     ${opts.gear ?? ""}
-    ${limb([p.hip, p.neck], 11, UNIFORM)}
+    ${limb([p.hip, p.neck], 11, uni)}
     <path d="M${(bx - nx).toFixed(1)} ${(by - ny).toFixed(1)}L${(bx + nx).toFixed(1)} ${(by + ny).toFixed(1)}" stroke="${DARK}" stroke-width="2"/>
-    ${limb([p.hip, p.fk, p.ff], 6.6, LEG)}${limb(boots[1], 3.8, "#1c1e16")}
+    ${limb([p.hip, p.fk, p.ff], 6.6, leg)}${limb(boots[1], 3.8, "#1c1e16")}
     ${opts.held ?? ""}
     <circle cx="${hx}" cy="${hy + 0.8}" r="4.3" fill="${SKIN}" ${s(1.3)}/>
-    ${p.bare ? `<path d="M${hx - 4} ${hy - 1}h8" stroke="#e8e4d6" stroke-width="2.4"/>` : helmet(p.head, opts.helmetColor, opts.mark)}
-    ${limb([p.sh, p.fe, p.fh], 4.6, UNIFORM)}
+    ${p.bare ? `<path d="M${hx - 4} ${hy - 1}h8" stroke="#e8e4d6" stroke-width="2.4"/>` : opts.beret ? beret(p.head) : helmet(p.head, opts.helmetColor, opts.mark)}
+    ${limb([p.sh, p.fe, p.fh], 4.6, uni)}
     ${opts.armband ? `<circle cx="${p.fe[0]}" cy="${p.fe[1]}" r="2.6" fill="#f4f1e6"/><path d="M${p.fe[0]} ${p.fe[1] - 1.6}v3.2M${p.fe[0] - 1.6} ${p.fe[1]}h3.2" stroke="#c8352b" stroke-width="1.1"/>` : ""}
     <circle cx="${p.fh[0]}" cy="${p.fh[1]}" r="1.9" fill="${SKIN}" ${s(1)}/>
   </g>`;
@@ -151,7 +166,7 @@ function spokeWheel(cx: number, cy: number, r: number) {
 }
 
 /** 畫在 x 的人，k 倍大（以腳底 y = 72 為準縮放） */
-function fig(x: number, k: number, pose: Pose, o: { rifle?: [number, number]; pack?: boolean; gear?: string; held?: string; helmetColor?: string; mark?: string; armband?: boolean } = {}) {
+function fig(x: number, k: number, pose: Pose, o: Kit & { rifle?: [number, number]; pack?: boolean } = {}) {
   const held = (o.rifle ? rifleThrough(pose.bh, pose.fh, o.rifle[0], o.rifle[1]) : "") + (o.held ?? "");
   const gear = (o.pack ? pack(pose) : "") + (o.gear ?? "");
   return `<g transform="translate(${x} 72) scale(${k}) translate(0 -72)">${person(pose, { ...o, held, gear })}</g>`;
@@ -241,6 +256,14 @@ const ART: Record<ArmoryKind, () => string> = {
         <path d="M-7 50 Q-3 58 3 47" stroke="${METAL}" stroke-width="2" fill="none"/>`,
       held: limb([[2.2, 46.2], [30.5, 39.1]], 2.8, METAL),
     }),
+
+  commando: () =>
+    shadow(140, 90) +
+    // 遠方的獵殺目標：紅色準星
+    `<g stroke="#d8452f" stroke-width="1.8" fill="none" opacity=".9"><circle cx="222" cy="40" r="11"/><path d="M222 25v7M222 48v7M207 40h7M230 40h7"/></g>
+    <circle cx="222" cy="40" r="1.8" fill="#d8452f"/>` +
+    fig(92, 1.22, AIM, { beret: true, rifle: [5, 7] }) +
+    fig(150, 1.22, KNEEL, { beret: true, rifle: [5, 7], gear: `<rect x="-11" y="42" width="6.5" height="11" rx="2" fill="#3b3a2a" ${s(1.2)}/>` }),
 
   car: () =>
     shadow(128, 96) +

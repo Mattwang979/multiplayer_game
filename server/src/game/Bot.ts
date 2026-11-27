@@ -67,12 +67,12 @@ export const PROFILES: Record<BotLevel, Profile> = {
   },
   // 困難：守在堡壘裡等對手撞牆、存一筆錢在被打的據點即時補兵、集中兵力算好再打、看你出什麼就剋制
   hard: {
-    think: [0.4, 0.8], units: ["rifle", "mg", "at", "tank", "artillery", "medic", "engineer", "flak"], counter: 0.6, air: 0.7, upgrade: 0.3, build: 0.4, convert: 0.25,
+    think: [0.4, 0.8], units: ["rifle", "mg", "at", "tank", "artillery", "medic", "engineer", "flak", "commando"], counter: 0.6, air: 0.7, upgrade: 0.3, build: 0.4, convert: 0.25,
     crates: true, defend: false, retreat: 0.9, retreatAt: 0.4, attackNeed: 0, reserve: 150, focus: true,
     plan: 1.4, consolidate: true,
   },
   brutal: {
-    think: [0.35, 0.7], units: ["rifle", "mg", "at", "tank", "artillery", "medic", "engineer", "flak"], counter: 0.6, air: 0.8, upgrade: 0.35, build: 0.45, convert: 0.3,
+    think: [0.35, 0.7], units: ["rifle", "mg", "at", "tank", "artillery", "medic", "engineer", "flak", "commando"], counter: 0.6, air: 0.8, upgrade: 0.35, build: 0.45, convert: 0.3,
     crates: true, defend: false, retreat: 0.9, retreatAt: 0.4, attackNeed: 0, reserve: 150, focus: true,
     plan: 1.4, consolidate: true,
   },
@@ -132,11 +132,38 @@ export class BotBrain {
     this.buy(battle, p, owned, threats);
     this.attack(battle, p, owned);
     if (pr.crates) this.chaseCrates(battle, p);
+    this.aimHunters(battle, p);
     if (this.rng() < pr.convert) this.tryConvert(battle, p, owned);
     if (s.time >= this.nextRegroup) {
       this.nextRegroup = s.time + 5 + this.rng() * 4;
       this.regroup(battle, p);
     }
+  }
+
+  /** 特種部隊：獵殺敵人場上總價值最高的兵種（醫療兵不算） */
+  private aimHunters(battle: Battle, p: Player) {
+    const s = battle.state;
+    const worth = new Map<string, number>();
+    const mine: Unit[] = [];
+    s.units.forEach((u) => {
+      if (u.hp <= 0) return;
+      if (u.owner === p.id) {
+        if (u.type === "commando") mine.push(u);
+      } else if (u.type !== "medic" && u.type !== "para") {
+        worth.set(u.type, (worth.get(u.type) ?? 0) + UNITS[u.type as UnitType].cost);
+      }
+    });
+    if (mine.length === 0) return;
+    let best = "";
+    let bestV = 0;
+    worth.forEach((v, t) => {
+      if (v > bestV) {
+        bestV = v;
+        best = t;
+      }
+    });
+    const stale = mine.filter((u) => u.hunt !== best);
+    if (stale.length && best) battle.setHunt(p.id, stale.map((u) => u.id), best);
   }
 
   /** 每個自己的據點附近有多少敵軍 */
@@ -436,7 +463,8 @@ export class BotBrain {
     });
     const defense = this.defenseOf(battle, this.target);
     // 快結束時要搶據點，標準放寬
-    const ratio = s.time > s.duration - 120 ? pr.plan * 0.6 : pr.plan;
+    // 快結束時（有時限的對局）不再慢慢集結
+    const ratio = s.duration > 0 && s.time > s.duration - 120 ? pr.plan * 0.6 : pr.plan;
     const pop = battle.garrisonAt(stage);
     const full = pop >= battle.garrisonCapAt(stage) - 1 || p.pop >= POP_CAP - 4 || upkeepFor(battle.garrisonPopOf(p.id)) >= 2.6;
     const rush = s.time < 50 && pop >= 3 && defense < 120;

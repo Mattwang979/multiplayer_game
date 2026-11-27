@@ -68,6 +68,10 @@ import {
   LOGISTICS_COOLDOWN_PER_LEVEL,
   LOGISTICS_INCOME_PER_LEVEL,
   MATCH_SECONDS,
+  HUNT_BONUS,
+  HUNT_RANGE,
+  HUNTERS,
+  isHuntTarget,
   MAX_ORDER_UNITS,
   MAX_UPGRADE_LEVEL,
   PARA_LAND_TIME,
@@ -276,7 +280,7 @@ export class Battle {
    * 從據點派兵：counts 依 UNIT_TYPES 順序，全部是 0 代表全部派出。
    * 部隊依 RELEASE_ORDER 排隊、每隔 RELEASE_INTERVAL 秒出門一支。
    */
-  dispatch(playerId: string, node: number, counts: number[], via: number[], dest: Dest, enter: boolean): string | null {
+  dispatch(playerId: string, node: number, counts: number[], via: number[], dest: Dest, enter: boolean, hunt?: string): string | null {
     const p = this.activePlayer(playerId);
     if (!p) return "現在不能下指令";
     if (!this.owns(playerId, node)) return "只能從自己的據點派兵";
@@ -308,6 +312,7 @@ export class Battle {
     let at = Math.max(this.state.time + 0.05, this.nextRelease.get(node) ?? 0);
     for (const u of picked) {
       this.setOrder(u, plan, dest, !!enter, group, "move");
+      if (hunt !== undefined && HUNTERS.includes(u.type as UnitType)) u.hunt = isHuntTarget(hunt) ? hunt : "";
       u.departAt = at;
       at += RELEASE_INTERVAL;
     }
@@ -332,6 +337,17 @@ export class Battle {
       ok += 1;
     }
     return ok > 0 ? null : "走不到那裡";
+  }
+
+  /** 特種部隊：指定（或取消）要優先獵殺的兵種；野外、駐軍都可以 */
+  setHunt(playerId: string, unitIds: string[], type: string): string | null {
+    const p = this.activePlayer(playerId);
+    if (!p) return "現在不能下指令";
+    const hunters = this.ownUnits(playerId, unitIds).filter((u) => HUNTERS.includes(u.type as UnitType));
+    if (hunters.length === 0) return "選的部隊裡沒有特種部隊";
+    const t = isHuntTarget(type) ? type : "";
+    for (const u of hunters) u.hunt = t;
+    return null;
   }
 
   /** 停下：野外的部隊就地駐守（取消移動、撤退），附近有敵人照樣會開火 */
@@ -598,7 +614,7 @@ export class Battle {
 
     this.updateFronts(dt);
     if (s.time >= this.nextSample) this.recordHistory();
-    if (s.time >= s.duration) this.endByTime();
+    if (s.duration > 0 && s.time >= s.duration) this.endByTime();
   }
 
   // ================================================================ 經濟
@@ -759,7 +775,9 @@ export class Battle {
     if (!u.attacking) u.attacking = true;
     if (u.cooldownLeft > 0) return;
     u.cooldownLeft = def.cooldown;
-    const dmg = def.damage * this.firepowerMult(u.owner);
+    let dmg = def.damage * this.firepowerMult(u.owner);
+    // 特種部隊打指定的兵種：傷害加成
+    if (u.hunt && target.kind === "unit" && target.obj.type === u.hunt) dmg *= HUNT_BONUS;
     if (def.splash) this.splash(u.owner, target.lane, target.x, def.splash, dmg, def.weapon, units, structures);
     else this.hitTarget(u.owner, target, dmg, def.weapon);
     u.tl = target.lane;
@@ -961,6 +979,20 @@ export class Battle {
     let best: Target | null = null;
     let bestD = range;
     const now = this.state.time;
+    // 特種部隊：射程（加長）內有指定的兵種，就先打它
+    if (u.hunt && !buildingsOnly) {
+      let hd = range * HUNT_RANGE;
+      let prey: Unit | null = null;
+      for (const e of units) {
+        if (e.type !== u.hunt || e.owner === u.owner || e.hp <= 0 || e.landT > now || e.inNode >= 0) continue;
+        const d = roadDistance(this.map, u.lane, u.x, e.lane, e.x);
+        if (d >= minRange && d <= hd) {
+          hd = d;
+          prey = e;
+        }
+      }
+      if (prey) return { kind: "unit", obj: prey, lane: prey.lane, x: prey.x };
+    }
     for (const e of buildingsOnly ? [] : units) {
       if (e.owner === u.owner || e.hp <= 0 || e.landT > now || e.inNode >= 0) continue;
       const d = roadDistance(this.map, u.lane, u.x, e.lane, e.x);
@@ -1408,7 +1440,7 @@ export class Battle {
     if (s.event && now >= s.eventEnd) this.endEvent();
     if (s.event === "barrage") this.updateBarrage();
     this.updateCrates();
-    if (!s.event && now >= this.nextEvent && now < s.duration - 25) {
+    if (!s.event && now >= this.nextEvent && (s.duration <= 0 || now < s.duration - 25)) {
       const choices = EVENT_KINDS.filter((k) => k !== this.lastEvent);
       this.startEvent(choices[Math.floor(this.rng() * choices.length)]);
     }
