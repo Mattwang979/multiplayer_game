@@ -80,6 +80,16 @@ const MAX_ZOOM = 3.2;
 // 畫面比地圖寬（手機橫向）時，地圖外面還要有地形，不然兩邊是黑的
 const MARGIN_X = 900;
 const MARGIN_Y = 500;
+/** 地圖下緣隨時可以多往上拉這麼多（CSS 像素），被右下技能鈕、指令列蓋住的地方拉上來就看得到 */
+const BASE_PAD_CSS = 100;
+
+/** 各地形的地面配色：地圖和外圍共用，外圍才會跟地圖同一個樣子 */
+const GROUND: Record<string, { base: string; patches: [string, string]; tree: [string, string, string]; rock: [string, string] }> = {
+  grass: { base: "#a9c46c", patches: ["rgba(143,176,90,0.45)", "rgba(186,208,128,0.45)"], tree: ["#4f7d31", "#2f4f1c", "#6a9a40"], rock: ["#a5a093", "#5e5a4e"] },
+  river: { base: "#a3c26a", patches: ["rgba(143,176,90,0.45)", "rgba(186,208,128,0.45)"], tree: ["#4f7d31", "#2f4f1c", "#6a9a40"], rock: ["#a5a093", "#5e5a4e"] },
+  desert: { base: "#e2cf97", patches: ["rgba(212,189,128,0.55)", "rgba(236,220,170,0.55)"], tree: ["#8a8a4a", "#5b5a2c", "#a6a660"], rock: ["#b9a37a", "#7a6646"] },
+  highland: { base: "#b7c28a", patches: ["rgba(150,160,110,0.5)", "rgba(200,205,160,0.45)"], tree: ["#4f7d31", "#2f4f1c", "#6a9a40"], rock: ["#a5a093", "#5e5a4e"] },
+};
 
 interface UnitView {
   c: Phaser.GameObjects.Container;
@@ -140,7 +150,7 @@ export class BattleScene extends Phaser.Scene {
   private fx!: Fx;
   private ground?: Phaser.GameObjects.Image;
   private margin?: Phaser.GameObjects.TileSprite;
-  private edge?: Phaser.GameObjects.Graphics;
+  private riverExt: Phaser.GameObjects.Image[] = [];
   private padBottomCss = 0; // 下方抽屜蓋住的高度（CSS 像素）：鏡頭可以多往下捲這麼多
   private territory!: Phaser.GameObjects.Graphics;
   private bars!: Phaser.GameObjects.Graphics;
@@ -350,22 +360,76 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
-  /** 地圖外圍：同色系、暗一點的地形，加一圈陰影當邊界 */
+  /** 地圖外圍：跟地圖同一種地面（底色、斑塊、草葉、樹、石頭），無縫重複鋪滿；河流也延伸出去 */
   private paintMargin() {
-    const theme = this.map.def.theme;
-    const key = `margin-${theme}`;
+    const def = this.map.def;
+    const theme = def.theme;
+    const look = GROUND[theme];
+    const key = `margin2-${theme}`;
+    const T = 512;
     if (!this.textures.exists(key)) {
-      const base = { grass: "#7f9650", river: "#7c9550", desert: "#b39d68", highland: "#8c9468" }[theme];
-      const tex = this.textures.createCanvas(key, 256, 256)!;
+      const tex = this.textures.createCanvas(key, T, T)!;
       const c = tex.getContext();
-      c.fillStyle = base;
-      c.fillRect(0, 0, 256, 256);
-      const rand = mulberry(theme.length * 131);
-      for (let i = 0; i < 70; i++) {
-        c.fillStyle = rand() < 0.5 ? "rgba(0,0,0,0.06)" : "rgba(255,255,255,0.05)";
-        c.beginPath();
-        c.ellipse(rand() * 256, rand() * 256, 6 + rand() * 26, 4 + rand() * 14, rand() * 3, 0, Math.PI * 2);
-        c.fill();
+      const rand = mulberry(theme.length * 131 + 7);
+      const R = (a: number, b: number) => a + rand() * (b - a);
+      // 每樣東西在九宮格位置各畫一次，貼圖上下左右接起來才不會有縫
+      const wrap = (fn: (ox: number, oy: number) => void) => {
+        for (const ox of [-T, 0, T]) for (const oy of [-T, 0, T]) fn(ox, oy);
+      };
+      c.fillStyle = look.base;
+      c.fillRect(0, 0, T, T);
+      for (let i = 0; i < 16; i++) {
+        const [x, y, rx, ry, a] = [R(0, T), R(0, T), R(40, 170), R(20, 80), R(0, 3)];
+        c.fillStyle = look.patches[i % 2];
+        wrap((ox, oy) => {
+          c.beginPath();
+          c.ellipse(x + ox, y + oy, rx, ry, a, 0, Math.PI * 2);
+          c.fill();
+        });
+      }
+      if (theme === "desert") {
+        for (let i = 0; i < 10; i++) {
+          const [x, y, w, h, lw] = [R(0, T), R(0, T), R(60, 160), R(10, 24), R(2, 4)];
+          c.strokeStyle = i % 2 ? "rgba(190,165,105,0.45)" : "rgba(245,232,190,0.6)";
+          c.lineWidth = lw;
+          wrap((ox, oy) => {
+            c.beginPath();
+            c.moveTo(x + ox - w / 2, y + oy);
+            c.quadraticCurveTo(x + ox, y + oy - h, x + ox + w / 2, y + oy);
+            c.stroke();
+          });
+        }
+      }
+      for (let i = 0; i < 430; i++) {
+        const [x, y, lean, h, pick] = [R(0, T), R(0, T), R(-2, 2), R(3, 6), rand()];
+        wrap((ox, oy) => {
+          if (theme === "desert") {
+            c.fillStyle = pick < 0.5 ? "rgba(170,150,100,0.5)" : "rgba(250,240,210,0.6)";
+            c.fillRect(x + ox, y + oy, 2, 2);
+          } else {
+            c.strokeStyle = pick < 0.5 ? "rgba(120,150,70,0.5)" : "rgba(200,220,150,0.45)";
+            c.lineWidth = 1;
+            c.beginPath();
+            c.moveTo(x + ox, y + oy);
+            c.lineTo(x + ox + lean, y + oy - h);
+            c.stroke();
+          }
+        });
+      }
+      const groups = theme === "desert" ? 4 : theme === "highland" ? 7 : 12;
+      for (let i = 0; i < groups; i++) {
+        const [x, y] = [R(0, T), R(0, T)];
+        const n = 1 + Math.floor(rand() * (theme === "desert" ? 2 : 4));
+        for (let k = 0; k < n; k++) {
+          const [tx, ty] = [x + R(-24, 24), y + R(-18, 18)];
+          const r = theme === "desert" ? R(8, 13) : R(12, 23);
+          wrap((ox, oy) => drawTree(c, tx + ox, ty + oy, r, look));
+        }
+      }
+      const rocks = theme === "grass" || theme === "river" ? 5 : 11;
+      for (let i = 0; i < rocks; i++) {
+        const [x, y, rx, ry, a] = [R(0, T), R(0, T), R(5, 13), R(4, 9), R(0, 3)];
+        wrap((ox, oy) => drawRock(c, x + ox, y + oy, rx, ry, a, look));
       }
       tex.refresh();
     }
@@ -374,13 +438,46 @@ export class BattleScene extends Phaser.Scene {
       .tileSprite(-MARGIN_X, -MARGIN_Y, WORLD_W + MARGIN_X * 2, WORLD_H + MARGIN_Y * 2, key)
       .setOrigin(0)
       .setDepth(DEPTH.ground - 2);
-    this.edge?.destroy();
-    const g = this.add.graphics().setDepth(DEPTH.ground - 1);
-    for (let i = 0; i < 6; i++) {
-      g.lineStyle(10, 0x0d0e0a, 0.13 - i * 0.018);
-      g.strokeRect(-5 - i * 10, -5 - i * 10, WORLD_W + 10 + i * 20, WORLD_H + 10 + i * 20);
-    }
-    this.edge = g;
+
+    // 河流流出地圖的兩端
+    this.riverExt.forEach((img) => img.destroy());
+    this.riverExt = [];
+    if (!def.river) return;
+    const pts = extendRiver(def.river);
+    const inside = (p: Vec) => p.x >= 0 && p.x <= WORLD_W && p.y >= 0 && p.y <= WORLD_H;
+    const first = pts.findIndex(inside);
+    let last = -1;
+    pts.forEach((p, i) => inside(p) && (last = i));
+    if (first < 0) return;
+    const pieces = [pts.slice(0, first + 3), pts.slice(Math.max(0, last - 2))];
+    pieces.forEach((seg, idx) => {
+      if (seg.length < 2) return;
+      const xs = seg.map((p) => p.x);
+      const ys = seg.map((p) => p.y);
+      const x0 = Math.floor(Math.min(...xs) - 60);
+      const y0 = Math.floor(Math.min(...ys) - 60);
+      const w = Math.ceil(Math.max(...xs) + 60) - x0;
+      const h = Math.ceil(Math.max(...ys) + 60) - y0;
+      const k = `river-ext-${def.id}-${idx}`;
+      if (!this.textures.exists(k)) {
+        const tex = this.textures.createCanvas(k, w, h)!;
+        const c = tex.getContext();
+        c.translate(-x0, -y0);
+        drawRiver(c, seg);
+        const rand = mulberry(idx + 41);
+        c.strokeStyle = "rgba(220,240,250,0.55)";
+        c.lineWidth = 2;
+        for (let i = 0; i < 12; i++) {
+          const p = seg[Math.floor(rand() * (seg.length - 1))];
+          c.beginPath();
+          c.moveTo(p.x - 18 + rand() * 24, p.y);
+          c.lineTo(p.x + 8 + rand() * 14, p.y - 3 + rand() * 6);
+          c.stroke();
+        }
+        tex.refresh();
+      }
+      this.riverExt.push(this.add.image(x0, y0, k).setOrigin(0).setDepth(DEPTH.ground - 1));
+    });
   }
 
   /** 畫一次整張地面（地形、河流、湖、山、道路、橋、樹），之後當成一張圖用 */
@@ -392,11 +489,8 @@ export class BattleScene extends Phaser.Scene {
     const R = (a: number, b: number) => a + rand() * (b - a);
     const theme = def.theme;
 
-    const base = { grass: "#a9c46c", river: "#a3c26a", desert: "#e2cf97", highland: "#b7c28a" }[theme];
-    const patches =
-      theme === "desert" ? ["rgba(212,189,128,0.55)", "rgba(236,220,170,0.55)"] :
-      theme === "highland" ? ["rgba(150,160,110,0.5)", "rgba(200,205,160,0.45)"] :
-      ["rgba(143,176,90,0.45)", "rgba(186,208,128,0.45)"];
+    const look = GROUND[theme];
+    const { base, patches } = look;
     c.fillStyle = base;
     c.fillRect(0, 0, WORLD_W, WORLD_H);
     for (let i = 0; i < 90; i++) {
@@ -449,6 +543,23 @@ export class BattleScene extends Phaser.Scene {
       }
     }
 
+    // 地面四邊淡出：底下外圍的地面透上來，地圖跟外圍接起來看不到一條邊（道路、樹、據點之後才畫，不受影響）
+    c.save();
+    c.globalCompositeOperation = "destination-out";
+    const F = 80;
+    const band = (x0: number, y0: number, x1: number, y1: number, rx: number, ry: number, rw: number, rh: number) => {
+      const g = c.createLinearGradient(x0, y0, x1, y1);
+      g.addColorStop(0, "rgba(0,0,0,1)");
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      c.fillStyle = g;
+      c.fillRect(rx, ry, rw, rh);
+    };
+    band(0, 0, F, 0, 0, 0, F, WORLD_H);
+    band(WORLD_W, 0, WORLD_W - F, 0, WORLD_W - F, 0, F, WORLD_H);
+    band(0, 0, 0, F, 0, 0, WORLD_W, F);
+    band(0, WORLD_H, 0, WORLD_H - F, 0, WORLD_H - F, WORLD_W, F);
+    c.restore();
+
     const strokePath = (pts: Vec[]) => {
       c.beginPath();
       pts.forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)));
@@ -456,14 +567,8 @@ export class BattleScene extends Phaser.Scene {
     // 河流
     const riverPts = def.river ? smooth(def.river.map(([x, y]) => ({ x, y }))) : [];
     if (riverPts.length) {
-      c.lineCap = "round";
-      c.lineJoin = "round";
-      for (const [w, col] of [[92, "#c9b27a"], [70, "#5f9bbd"], [52, "#6fa8c8"]] as [number, string][]) {
-        strokePath(riverPts);
-        c.strokeStyle = col;
-        c.lineWidth = w;
-        c.stroke();
-      }
+      // 用延伸到地圖外的河道來畫，接上外圍的河流才不會錯開
+      drawRiver(c, extendRiver(def.river!));
       c.strokeStyle = "rgba(220,240,250,0.55)";
       c.lineWidth = 2;
       for (let k = 0; k < 40; k++) {
@@ -628,21 +733,7 @@ export class BattleScene extends Phaser.Scene {
         const tx = x + R(-24, 24);
         const ty = y + R(-18, 18);
         const r = theme === "desert" ? R(8, 13) : R(12, 23);
-        c.fillStyle = "rgba(0,0,0,0.16)";
-        c.beginPath();
-        c.arc(tx + 7, ty + 9, r, 0, Math.PI * 2);
-        c.fill();
-        c.fillStyle = theme === "desert" ? "#8a8a4a" : "#4f7d31";
-        c.strokeStyle = theme === "desert" ? "#5b5a2c" : "#2f4f1c";
-        c.lineWidth = 2;
-        c.beginPath();
-        c.arc(tx, ty, r, 0, Math.PI * 2);
-        c.fill();
-        c.stroke();
-        c.fillStyle = theme === "desert" ? "#a6a660" : "#6a9a40";
-        c.beginPath();
-        c.arc(tx - r * 0.3, ty - r * 0.3, r * 0.45, 0, Math.PI * 2);
-        c.fill();
+        drawTree(c, tx, ty, r, look);
       }
     }
     // 綠洲的棕櫚樹
@@ -678,13 +769,8 @@ export class BattleScene extends Phaser.Scene {
       const x = R(20, WORLD_W - 20);
       const y = R(20, WORLD_H - 20);
       if (!clear(x, y, 46)) continue;
-      c.fillStyle = theme === "desert" ? "#b9a37a" : "#a5a093";
-      c.strokeStyle = theme === "desert" ? "#7a6646" : "#5e5a4e";
-      c.lineWidth = 1.5;
-      c.beginPath();
-      c.ellipse(x, y, R(5, 13), R(4, 9), R(0, 3), 0, Math.PI * 2);
-      c.fill();
-      c.stroke();
+      const [rx, ry, a] = [R(5, 13), R(4, 9), R(0, 3)];
+      drawRock(c, x, y, rx, ry, a, look);
     }
     // 舊彈坑
     for (let i = 0; i < 22; i++) {
@@ -1737,7 +1823,8 @@ export class BattleScene extends Phaser.Scene {
     const vw = cam.width / z;
     const vh = cam.height / z;
     const rect = this.game.canvas.getBoundingClientRect();
-    const pad = (this.padBottomCss * (this.scale.width / Math.max(1, rect.width))) / z; // 抽屜蓋住的世界高度
+    // 下方被蓋住的世界高度：抽屜打開時是抽屜高，平常也留一段，讓地圖下緣隨時能拉到技能鈕、指令列上面
+    const pad = (Math.max(this.padBottomCss, BASE_PAD_CSS) * (this.scale.width / Math.max(1, rect.width))) / z;
     let cx = cam.scrollX + cam.width / 2;
     let cy = cam.scrollY + cam.height / 2;
     cx = vw >= WORLD_W ? WORLD_W / 2 : Math.max(vw / 2, Math.min(WORLD_W - vw / 2, cx));
@@ -2189,6 +2276,69 @@ export class BattleScene extends Phaser.Scene {
     const d = Math.hypot(x - cam.midPoint.x, y - cam.midPoint.y);
     return Math.max(0.15, 1 - d / 1400);
   }
+}
+
+/** 河道兩端各往外延伸 640，讓河流一路流出地圖外圍 */
+function extendRiver(river: [number, number][]): Vec[] {
+  const pts = river.map(([x, y]) => ({ x, y }));
+  const ext = (a: Vec, b: Vec, side: number) => {
+    const len = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    const ux = (a.x - b.x) / len;
+    const uy = (a.y - b.y) / len;
+    const out: Vec[] = [];
+    for (let k = 1; k <= 4; k++) {
+      const w = (k % 2 ? 1 : -1) * 26 * side;
+      out.push({ x: a.x + ux * k * 160 - uy * w, y: a.y + uy * k * 160 + ux * w });
+    }
+    return out;
+  };
+  const head = ext(pts[0], pts[1], 1).reverse();
+  const tail = ext(pts[pts.length - 1], pts[pts.length - 2], -1);
+  return smooth([...head, ...pts, ...tail]);
+}
+
+/** 河岸、河水、亮面三層 */
+function drawRiver(c: CanvasRenderingContext2D, pts: Vec[]) {
+  c.lineCap = "round";
+  c.lineJoin = "round";
+  for (const [w, col] of [[92, "#c9b27a"], [70, "#5f9bbd"], [52, "#6fa8c8"]] as [number, string][]) {
+    c.beginPath();
+    pts.forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)));
+    c.strokeStyle = col;
+    c.lineWidth = w;
+    c.stroke();
+  }
+}
+
+type GroundLook = (typeof GROUND)[string];
+
+/** 一棵樹（沙漠是枯灌木）：影子、樹冠、亮面 */
+function drawTree(c: CanvasRenderingContext2D, x: number, y: number, r: number, look: GroundLook) {
+  c.fillStyle = "rgba(0,0,0,0.16)";
+  c.beginPath();
+  c.arc(x + 7, y + 9, r, 0, Math.PI * 2);
+  c.fill();
+  c.fillStyle = look.tree[0];
+  c.strokeStyle = look.tree[1];
+  c.lineWidth = 2;
+  c.beginPath();
+  c.arc(x, y, r, 0, Math.PI * 2);
+  c.fill();
+  c.stroke();
+  c.fillStyle = look.tree[2];
+  c.beginPath();
+  c.arc(x - r * 0.3, y - r * 0.3, r * 0.45, 0, Math.PI * 2);
+  c.fill();
+}
+
+function drawRock(c: CanvasRenderingContext2D, x: number, y: number, rx: number, ry: number, a: number, look: GroundLook) {
+  c.fillStyle = look.rock[0];
+  c.strokeStyle = look.rock[1];
+  c.lineWidth = 1.5;
+  c.beginPath();
+  c.ellipse(x, y, rx, ry, a, 0, Math.PI * 2);
+  c.fill();
+  c.stroke();
 }
 
 function smooth(points: Vec[]): Vec[] {
