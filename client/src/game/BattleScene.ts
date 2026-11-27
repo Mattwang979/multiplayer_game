@@ -1442,16 +1442,19 @@ export class BattleScene extends Phaser.Scene {
         const y = below ? nd.y + off : nd.y - off - th;
         bar(nd.x, y, w, n.hp / n.maxHp, hpColor(n.hp / n.maxHp), hq ? th + 3 : th);
       }
-      // 佔領進度圈
-      if (n.progress > 0 && n.capFaction >= 0) {
+      // 佔領進度圈；爭奪中（附近還有別人的部隊）底圈變紅、進度閃爍暫停
+      if ((n.progress > 0 && n.capFaction >= 0) || n.contested) {
         const r = M() ? 54 : 46;
-        g.lineStyle(11, 0x1d1d17, 0.7);
+        g.lineStyle(11, n.contested ? 0x7a2414 : 0x1d1d17, n.contested ? 0.85 : 0.7);
         g.strokeCircle(nd.x, nd.y, r);
-        const col = FACTIONS[n.capFaction].color;
-        g.lineStyle(7, col === 0xf2f4f6 ? 0xffffff : col, 1);
-        g.beginPath();
-        g.arc(nd.x, nd.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, n.progress), false);
-        g.strokePath();
+        if (n.progress > 0 && n.capFaction >= 0) {
+          const col = FACTIONS[n.capFaction].color;
+          const pulse = n.contested ? 0.45 + 0.4 * Math.abs(Math.sin(this.time.now / 260)) : 1;
+          g.lineStyle(7, col === 0xf2f4f6 ? 0xffffff : col, pulse);
+          g.beginPath();
+          g.arc(nd.x, nd.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, n.progress), false);
+          g.strokePath();
+        }
       }
     }
   }

@@ -5,6 +5,7 @@ import {
   BOT_LEVELS,
   BRUTAL_INCOME,
   BUILD_START_HP,
+  CONTEST_RADIUS,
   CAPTURE_GRACE,
   CONVERT_TIME,
   DEPOT_INCOME,
@@ -679,4 +680,48 @@ test("電腦難度：困難電腦大多打得贏簡單電腦", () => {
   }
   console.log(`  困難 vs 簡單：6 場贏 ${wins} 場`);
   assert.ok(wins >= 4, `困難只贏 ${wins} 場`);
+});
+
+// ---------- 再戰一局的勢力變化圖 ----------
+test("再戰一局：勢力變化從 0:00 開始、每 5 秒一筆", () => {
+  const { battle, state } = setup(2);
+  run(battle, 30);
+  battle.start(); // 再戰：state.time 原本停在 30
+  run(battle, 22);
+  const ts = battle.history.samples.map((x) => x.t);
+  assert.equal(ts[0], 0, `第一筆在 ${ts[0]}`);
+  for (let i = 1; i < ts.length; i++) assert.ok(ts[i] > ts[i - 1], `時間要遞增：${ts.join(",")}`);
+  assert.ok(ts.length >= 5, `22 秒應該有 5 筆以上：${ts.join(",")}`);
+  assert.ok(state.time > 21 && state.time < 23);
+});
+
+// ---------- 佔領要沒有敵軍在附近 ----------
+test("堡壘被攻破後，守軍站在門口不能趁攻方還在附近時馬上搶回", () => {
+  const { battle, state } = setup(2);
+  const [a, b] = [...state.players.values()];
+  // b 的一座堡壘（不是大本營）裡留 1 個步兵
+  const fort = state.nodes.findIndex((n, i) => n.owner === b.id && i !== b.hq);
+  assert.ok(fort >= 0);
+  give(battle, b.id, "rifle", fort, 1);
+  // a 的醫療兵（不會開槍）停在離堡壘 140 的路上：步兵打不到，但在爭奪範圍內
+  const lane = battle.map.adj[fort][0];
+  const geom = battle.map.lanes[lane];
+  const dir = nodeDir(geom, fort);
+  const at = nodeEnd(geom, fort) + dir * 140;
+  assert.ok(140 < CONTEST_RADIUS);
+  const [m] = place(battle, a.id, "medic", lane, at, dir === 1 ? -1 : 1, -1);
+  m.mode = "hold";
+  m.destLane = lane;
+  m.destX = at;
+  state.nodes[fort].hp = 0;
+  battle.step(DT); // 攻破：駐軍衝出來站在門口
+  assert.equal(state.nodes[fort].owner, "");
+  assert.ok(units(battle, (u) => u.owner === b.id && u.inNode < 0 && u.hp > 0).length >= 1);
+  run(battle, 5); // 超過 3 秒佔領時間
+  assert.equal(state.nodes[fort].owner, "", "攻方還在附近，守軍不該搶回去");
+  assert.ok(state.nodes[fort].contested);
+  // 攻方離開之後，守軍就能佔回來
+  m.hp = 0;
+  run(battle, 4);
+  assert.equal(state.nodes[fort].owner, b.id);
 });

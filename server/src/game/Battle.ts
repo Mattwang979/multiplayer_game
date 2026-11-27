@@ -52,6 +52,7 @@ import {
   CAPTURE_HP,
   CAPTURE_RADIUS,
   CAPTURE_TIME,
+  CONTEST_RADIUS,
   DAMAGE_TABLE,
   FACTIONS,
   FIREPOWER_PER_LEVEL,
@@ -164,6 +165,9 @@ export class Battle {
 
   start(duration = MATCH_SECONDS) {
     const s = this.state;
+    // 先把時鐘歸零：再戰一局時 s.time 還是上一局結束的時間，
+    // 下面記第一筆勢力變化、排下一次取樣都會用到它
+    s.time = 0;
     const players: Player[] = [];
     s.players.forEach((p) => players.push(p));
     players.sort((a, b) => a.faction - b.faction);
@@ -232,7 +236,6 @@ export class Battle {
     this.nextSample = 0;
     this.recordHistory();
 
-    s.time = 0;
     s.duration = duration;
     s.winnerId = "";
     s.endReason = "";
@@ -1113,13 +1116,18 @@ export class Battle {
       return;
     }
 
-    // 無主據點：只有一方的部隊在旁邊時，佔領進度往上加
+    // 無主據點：只有一方的部隊在旁邊、而且附近沒有別人的部隊時，佔領進度往上加
     const present = new Set<string>();
+    const nearby = new Set<string>();
     const now = this.state.time;
     for (const e of units) {
       if (e.hp <= 0 || e.landT > now || e.inNode >= 0) continue;
-      if (distTo(e) <= CAPTURE_RADIUS) present.add(e.owner);
+      const d = distTo(e);
+      if (d <= CAPTURE_RADIUS) present.add(e.owner);
+      if (d <= CONTEST_RADIUS) nearby.add(e.owner);
     }
+    n.contested = present.size > 1 || (present.size === 1 && nearby.size > 1);
+    if (n.contested) return; // 爭奪中：進度暫停
     if (present.size === 1) {
       const pid = [...present][0];
       if (n.capturer !== pid) {
@@ -1148,6 +1156,7 @@ export class Battle {
     n.capturer = "";
     n.capFaction = -1;
     n.progress = 0;
+    n.contested = false;
     n.cooldownLeft = 0.5;
     n.incomeAt = this.state.time + CAPTURE_GRACE;
     p.captures += 1;

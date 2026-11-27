@@ -48,6 +48,8 @@ export const LEADER_KILL_BOUNTY_MULT = 1.5;
 export const CAPTURE_TIME = 3; // 部隊在無主堡壘旁邊站幾秒可以佔領
 export const CAPTURE_RADIUS = 46; // 離堡壘多近才算在佔領（像素）
 export const CAPTURE_HP = 0.5; // 佔下來時有幾成血
+// 據點附近這個距離內還有別人的部隊，佔領就暫停（不然守軍被逼出來後，站在門口 3 秒就搶回去、又有半血）
+export const CONTEST_RADIUS = 160;
 
 // ---------- 陣營 ----------
 export interface Faction {
@@ -146,7 +148,7 @@ export const UNITS: Record<UnitType, UnitDef> = {
   },
   car: {
     name: "裝甲車", short: "跑最快的輕裝甲，搶點、追殺步兵", cost: 140, pop: 2, hp: 260, damage: 7, cooldown: 0.35,
-    range: 115, speed: 46, armor: "light", weapon: "mg", members: 1, hotkey: "5",
+    range: 115, speed: 60, armor: "light", weapon: "mg", members: 1, hotkey: "5",
   },
   tank: {
     name: "戰車", short: "厚甲突破，剋步兵與裝甲車", cost: 220, pop: 3, hp: 480, damage: 45, cooldown: 1.8,

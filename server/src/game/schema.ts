@@ -45,6 +45,7 @@ export const MapNode = schema(
     capturer: t.string().default(""), // 正在佔領的玩家
     capFaction: t.int8().default(-1),
     progress: t.float32().default(0), // 佔領進度 0~1
+    contested: t.boolean().default(false), // 有人在佔領，但附近還有別人的部隊（暫停）
     incomeAt: t.float32().default(0), // 剛佔下來時，到這個時間才開始產錢
     spec: t.string().default(""), // 改建成什麼（"" = 標準堡壘）
     specAt: t.float32().default(0), // 改建完成的時間

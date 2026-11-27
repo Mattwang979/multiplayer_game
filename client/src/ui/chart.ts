@@ -91,6 +91,8 @@ function lineKey(s: Series) {
 
 export function mountHistory(root: HTMLElement, h: BattleHistory, myId: string) {
   root.innerHTML = "";
+  // 照時間排好，資料順序亂掉也不會畫出折回去的線
+  if (h) h = { ...h, samples: [...h.samples].sort((a, b) => a.t - b.t) };
   if (!h || h.samples.length < 2) {
     const p = document.createElement("p");
     p.className = "hist-empty";

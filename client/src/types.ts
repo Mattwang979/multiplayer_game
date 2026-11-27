@@ -45,6 +45,7 @@ export interface NodeState {
   capturer: string;
   capFaction: number;
   progress: number;
+  contested: boolean; // 佔領暫停：附近還有別人的部隊
   incomeAt: number;
   spec: string;
   specAt: number;
